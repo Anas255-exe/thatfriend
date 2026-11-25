@@ -29,11 +29,13 @@
 | Time | Say | Do |
 |---|---|---|
 | 0:00 | "Every group trip dies in the group chat. One person ends up doing all the bookings, and something gets booked wrong." | Landing page, scroll once. |
-| 0:20 | "So you just text ThatFriend." | `/demo` → click the sample prompt: *Plan Ooty next weekend with Aman, Riya and Kabir, 15k per person* |
-| 0:40 | "Claude Code drafts 3 real itineraries within budget. I can tweak in plain words." | Pick A. Optional: type "add the toy train". |
-| 1:00 | "Now the part nobody wants to do: asking friends. ThatFriend does it for me, in each friend's language." | Click **Ask the squad**. Phones **ring** 📞. Click **Answer** on Riya's phone: Tamil voice from Sarvam. |
-| 1:20 | "Which works best: text, voice note or a call? That's a live **Flagsmith experiment**. Each friend is bucketed, and every 'yes' is a conversion event." | Point at the 🧪 experiment panel, then show **Tab 4** (Running). |
-| 1:40 | "Friends reply with requests ('veg food pls') and the plan adapts." | Personas reply. Agent Brain shows the plan adjusting. |
+| 0:20 | "So you just text ThatFriend, like you'd text your friend." | `/demo` → click the sample prompt: *plan kashmir next weekend w aman, riya n kabir, 15k each* |
+| 0:30 | "Plans die because nobody asks everyone properly. So before planning anything, it vibe-checks each friend, in their own language." | Phones light up / **ring** 📞. Click **Answer** on Riya's phone: Tamil voice from Sarvam. |
+| 0:50 | "How should it reach people: text, voice note or a call? That's a live **Flagsmith experiment**." | Point at the 🧪 panel, then show **Tab 4** (Running). |
+| 1:00 | "Everyone wants something different. Aman wants snow, Riya's broke, Kabir's veg and hates mornings." | Persona replies appear on each phone. |
+| 1:10 | "Claude Code researches real reviews online and merges it all. Look: who wanted what, and what it did." | Organizer chat shows the merge list plus 2 options. |
+| 1:25 | "Every place is a card: photo, why people rate it, price, Google Maps. You never leave the chat." | Scroll the place cards; tap 📍 Maps on one. |
+| 1:40 | "Pick one and the squad gives a final 👍." | Go with A → **final check w squad** → all ✅. |
 | 1:55 | "Before it spends money: what if something goes wrong? Flagsmith kill switch." | **Tab 3:** flip `payments_enabled` **OFF**. Click **Approve & book** → "🛑 Payments are paused." |
 | 2:10 | "Flip it back: no redeploy." | Flip **ON** → Approve again. |
 | 2:15 | "Big checkouts go through a **NudgeBee approval workflow**." | Gate appears → **Tab 5:** NudgeBee → Automations → workflow → **Executions** → the run shows "Waiting for approval" → click **approve**. ThatFriend continues to OTP within about 2 s. (Backup: **Sign off** in chat.) |

@@ -2,12 +2,15 @@
 
 **Nobody wants to be "that friend" who books the whole trip, so we built one.**
 
-Tell ThatFriend on Telegram: *"Ooty next weekend, 15k each, me + Aman, Riya, Kabir."* It will:
+Text ThatFriend on Telegram: *"kashmir next weekend w aman, riya n kabir, 15k each"*, or a meetup: *"dinner + movie saturday w the gang in blr"*. It will:
 
-1. **Plan:** draft 3 itineraries with per-person costs, then iterate in plain language ("cheaper stay", "add the toy train").
-2. **Rally the squad:** text each friend on your behalf, collect yes/no and requests ("veg food pls"), and adjust the plan.
-3. **Approve once:** show one cart with the per-person split. You tap approve and type the bank OTP.
-4. **Book & split:** book transport, stay, cabs and activities, send PNRs to everyone, and send each friend a UPI request for their share.
+1. **Vibe-check everyone first.** It DMs each friend on your behalf (text, Sarvam voice note or a voice "call", in their own language): what do you want, any must-dos, any hard no's, budget?
+2. **Merge it into one plan.** Claude Code does **web research** (reviews, Reddit, blogs) and builds a plan that blends everyone's input. It shows *who wanted what → what it did*, e.g. "Kabir: no 5am + veg → shikara at 9am, veg dhaba picks ✅".
+3. **Show real spots in the chat.** Every stay, place and café is a card with a photo, why people rate it, a review vibe, the price, and **Google Maps** and review links. No need to open another site.
+4. **Final 👍 from the squad,** then one cart with the per-person split. You approve and type the bank OTP.
+5. **Book & split.** It books transport, stays, tickets and table reservations, sends confirmations to everyone, and sends each friend a UPI request for their share.
+
+It talks like your friend, not a travel brochure: casual, Gen Z, a bit of Hinglish.
 
 > Hackathon proof of concept (festive & holiday theme). **Bookings and payments use a sandbox.** No real money moves and no card data is ever entered. The OTP comes from a simulated bank.
 
