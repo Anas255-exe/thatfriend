@@ -17,8 +17,9 @@ async function postWebhook(payload) {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(config.nudgebeeSecret ? { 'X-Webhook-Secret': config.nudgebeeSecret } : {}) },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(30000), // NudgeBee can take a while to accept when it starts a workflow run
     });
+    console.log(`[nudgebee] webhook ${payload.type} → HTTP ${r.status}`);
     nudgeStatus.lastError = r.ok ? null : `webhook ${r.status}`;
     return { ok: r.ok };
   } catch (e) { nudgeStatus.lastError = e.message; return { ok: false }; }
@@ -27,7 +28,14 @@ async function postWebhook(payload) {
 /** Fire-and-forget operational event (booking started/failed/recovered, payment authorized…). */
 export async function emitEvent(type, data) {
   nudgeStatus.events++;
-  return postWebhook({ source: 'thatfriend', type, at: new Date().toISOString(), ...data });
+  // The NudgeBee webhook is bound to the approval workflow, so only approval requests go there.
+  // Other events go to NUDGEBEE_EVENTS_WEBHOOK_URL if a second workflow is set up for them.
+  const url = process.env.NUDGEBEE_EVENTS_WEBHOOK_URL;
+  if (!url) return { ok: false, local: true };
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ source: 'thatfriend', type, at: new Date().toISOString(), ...data }), signal: AbortSignal.timeout(5000) });
+    return { ok: r.ok };
+  } catch (e) { nudgeStatus.lastError = e.message; return { ok: false }; }
 }
 
 /**

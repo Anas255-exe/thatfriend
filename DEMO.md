@@ -36,11 +36,16 @@
 | 1:40 | "Friends reply with requests ('veg food pls') and the plan adapts." | Personas reply. Agent Brain shows the plan adjusting. |
 | 1:55 | "Before it spends money: what if something goes wrong? Flagsmith kill switch." | **Tab 3:** flip `payments_enabled` **OFF**. Click **Approve & book** → "🛑 Payments are paused." |
 | 2:10 | "Flip it back: no redeploy." | Flip **ON** → Approve again. |
-| 2:15 | "Big checkouts go through a **NudgeBee approval runbook**." | Gate appears → approve in NudgeBee (or **Sign off**). |
+| 2:15 | "Big checkouts go through a **NudgeBee approval workflow**." | Gate appears → **Tab 5:** NudgeBee → Automations → workflow → **Executions** → the run shows "Waiting for approval" → click **approve**. ThatFriend continues to OTP within about 2 s. (Backup: **Sign off** in chat.) |
 | 2:30 | "OTP, then it books everything. And if a provider goes down mid-booking…" | (Before approving, flip `booking_failure_drill` ON.) Enter the OTP from the yellow SMS bubble → Agent Brain: *StaySandbox 503 → NudgeBee runbook fails over → recovered*. |
 | 2:50 | "Done. PNRs to everyone, a voice note in each friend's language, and a UPI request for their share. Nobody had to be *that friend*." | Show friend phones: confirmations + 🎙️ voice note. |
 
 **Bonus, live on Telegram:** send the bot a **voice note** in Hindi. Sarvam transcribes it and the agent replies.
+
+## Keep alive for the NudgeBee demo
+
+- **Cloudflare tunnel** (`cloudflared tunnel --url http://localhost:8787`) must be running, and its URL must match `PUBLIC_URL` in `.env` and the URL in the NudgeBee workflow's HTTP step. A quick tunnel gets a new URL each time it restarts.
+- **NudgeBee Forager agent** (`~/tools/nudgebee-forager/nudgebee-forager.exe --config forager.yaml`) keeps the `thatfriend` account connected.
 
 ## Backup plan
 
