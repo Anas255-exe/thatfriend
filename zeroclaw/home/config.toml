@@ -1,0 +1,86 @@
+schema_version = 4
+
+[tools]
+optional = ["*"]
+
+[agents.thatfriend.workspace.access]
+
+[http_request]
+allow_private_hosts = true
+allowed_domains = ["127.0.0.1", "localhost"]
+allowed_private_hosts = ["127.0.0.1", "localhost"]
+
+[agents.thatfriend.identity]
+format = "openclaw"
+
+[agents.thatfriend.memory]
+backend = "sqlite"
+
+[agents.thatfriend.a2a]
+published = false
+exposed_skills = []
+
+[providers]
+
+[providers.models]
+
+[providers.models.custom]
+
+[providers.models.custom.claudecode]
+uri = "http://127.0.0.1:8787/v1"
+model = "claude-code"
+
+[channels]
+
+[channels.telegram]
+
+[channels.telegram.thatfriend]
+per_user_session = true
+approval_timeout_secs = 120
+reply_min_interval_secs = 0
+stream_mode = "off"
+api_base_url = "https://api.telegram.org"
+passive_group_context = false
+enabled = true
+bot_token = ""
+draft_update_interval_ms = 1000
+excluded_tools = []
+interrupt_on_new_message = false
+mention_only = false
+reply_queue_depth_max = 0
+multi_message_delay_ms = 800
+
+[skill_bundles]
+
+[skill_bundles.thatfriend]
+include = []
+exclude = []
+directory = "shared/skills/thatfriend"
+
+[agents]
+
+[agents.thatfriend]
+delegates = []
+enabled = true
+mcp_bundles = []
+risk_profile = ""
+skill_bundles = ["thatfriend"]
+channels = ["telegram.thatfriend"]
+runtime_profile = ""
+model_provider = "custom.claudecode"
+tts_provider = ""
+classifier_provider = ""
+cron_jobs = []
+delegate_same_risk_profile = true
+acp_enable_mcp = false
+knowledge_bundles = []
+transcription_provider = ""
+summary_provider = ""
+
+[agents.thatfriend.precheck]
+timeout_secs = 5
+enabled = true
+
+[agents.thatfriend.workspace]
+read_memory_from = []
+unrestricted_filesystem = false

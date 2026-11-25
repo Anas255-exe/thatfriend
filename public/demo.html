@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ThatFriend · Live Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fff8ef; --panel:#ffffff; --ink:#22170f; --muted:#7a6656; --line:#f0e2d0;
+  --brand:#e8590c; --brand-2:#c2255c; --accent:#2b8a3e; --gold:#f59f00;
+  --tg-bg:#dfe9d8; --tg-in:#ffffff; --tg-out:#effdde; --tg-head:#517da2; --btn:#f3f6f9;
+  --shadow:0 20px 50px -20px rgba(80,40,10,.35);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#17110c; --panel:#211a14; --ink:#f8ede1; --muted:#b39d8a; --line:#3a2d22;
+  --tg-bg:#0e1621; --tg-in:#182533; --tg-out:#2b5278; --tg-head:#17212b; --btn:#22303e; --shadow:0 20px 50px -20px #000;
+}}
+:root[data-theme="dark"]{
+  --bg:#17110c; --panel:#211a14; --ink:#f8ede1; --muted:#b39d8a; --line:#3a2d22;
+  --tg-bg:#0e1621; --tg-in:#182533; --tg-out:#2b5278; --tg-head:#17212b; --btn:#22303e; --shadow:0 20px 50px -20px #000;
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 Inter,system-ui,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.logo{font-family:Fraunces,serif;font-weight:800;font-size:22px;text-decoration:none;color:var(--ink)}
+.logo span{color:var(--brand)}
+.pill{font-size:12px;padding:4px 10px;border-radius:99px;background:var(--panel);border:1px solid var(--line);color:var(--muted)}
+.pill b{color:var(--ink)} .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gold);margin-right:6px}
+.dot.on{background:var(--accent)}
+header .sp{flex:1}
+button{font:inherit;cursor:pointer}
+.btn{border:0;border-radius:10px;padding:8px 14px;background:var(--brand);color:#fff;font-weight:600}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+main{display:grid;grid-template-columns:minmax(320px,400px) 1fr minmax(280px,360px);gap:18px;padding:18px;max-width:1500px;margin:0 auto}
+@media (max-width:1100px){main{grid-template-columns:1fr 1fr}.brain{grid-column:1/-1}}
+@media (max-width:720px){main{grid-template-columns:1fr;padding:16px}}
+h2{font-family:Fraunces,serif;font-size:15px;margin:0 0 8px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.phone{background:var(--tg-bg);border-radius:26px;overflow:hidden;box-shadow:var(--shadow);display:flex;flex-direction:column;border:6px solid #1d1d1f;min-height:0}
+.phone .top{background:var(--tg-head);color:#fff;padding:10px 14px;display:flex;gap:10px;align-items:center}
+.av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:700;color:#fff;background:linear-gradient(135deg,var(--brand),var(--brand-2));flex:none}
+.top small{display:block;opacity:.75;font-size:11px}
+.chat{flex:1;overflow-y:auto;padding:12px 10px;display:flex;flex-direction:column;gap:6px}
+.org .chat{height:62vh;min-height:420px}
+.msg{max-width:86%;padding:7px 10px;border-radius:12px;white-space:pre-wrap;word-wrap:break-word;box-shadow:0 1px 1px rgba(0,0,0,.08);background:var(--tg-in);font-size:13.5px;animation:pop .2s ease}
+.msg.me{align-self:flex-end;background:var(--tg-out)}
+.msg.sms{align-self:center;background:#fff3bf;color:#5c3c00;font-size:12px;border:1px dashed #f59f00}
+.kb{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+.kb div{display:flex;gap:4px}
+.kb button{flex:1;border:0;border-radius:8px;padding:6px 8px;background:var(--btn);color:var(--ink);font-size:12.5px;font-weight:600}
+.kb button:hover{filter:brightness(.95)}
+@keyframes pop{from{transform:translateY(6px);opacity:0}}
+.compose{display:flex;gap:6px;padding:8px;background:var(--panel);border-top:1px solid var(--line)}
+.compose input{flex:1;border:1px solid var(--line);border-radius:18px;padding:9px 14px;background:var(--bg);color:var(--ink);font:inherit;min-width:0}
+.compose button{border:0;border-radius:50%;width:38px;height:38px;background:var(--tg-head);color:#fff;font-size:16px}
+.typing{font-size:12px;color:var(--muted);padding:0 12px 6px;height:18px}
+.friends{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;align-content:start}
+.friends .phone{border-width:5px;border-radius:22px}
+.friends .chat{height:300px}
+.empty{border:2px dashed var(--line);border-radius:18px;padding:28px;color:var(--muted);text-align:center}
+.vote{margin-left:auto;font-size:18px}
+.brain{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:var(--shadow)}
+.stages{display:flex;flex-wrap:wrap;gap:6px}
+.stages span{font-size:11.5px;padding:4px 9px;border-radius:99px;background:var(--bg);color:var(--muted);border:1px solid var(--line)}
+.stages span.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.stages span.done{color:var(--accent);border-color:var(--accent)}
+.log{max-height:46vh;overflow-y:auto;font-size:12.5px;display:flex;flex-direction:column;gap:5px}
+.log div{padding:6px 8px;border-radius:8px;background:var(--bg);border-left:3px solid var(--line)}
+.log .think{border-left-color:#7048e8}.log .act{border-left-color:var(--gold)}.log .done{border-left-color:var(--accent)}
+.log time{color:var(--muted);font-size:10.5px;margin-right:6px;font-variant-numeric:tabular-nums}
+.sum{font-size:13px;display:grid;gap:4px}
+.sum b{font-family:Fraunces,serif;font-size:20px}
+.hint{font-size:12px;color:var(--muted)}
+label.tog{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+.vn{display:flex;align-items:center;gap:8px}
+.vn button{border:0;border-radius:50%;width:30px;height:30px;background:var(--tg-head);color:#fff;flex:none}
+.vn .wave{flex:1;height:18px;background:repeating-linear-gradient(90deg,var(--muted) 0 2px,transparent 2px 5px);opacity:.5;border-radius:3px;min-width:80px}
+.vn small{color:var(--muted);font-size:11px}
+.phone{position:relative}
+.call{position:absolute;inset:0;background:linear-gradient(160deg,#1f2d3d,#0b1118);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:5;text-align:center;padding:16px}
+.call .big{width:72px;height:72px;border-radius:50%;display:grid;place-items:center;font-size:28px;background:linear-gradient(135deg,var(--brand),var(--brand-2));animation:ring 1.2s ease-in-out infinite}
+@keyframes ring{50%{box-shadow:0 0 0 14px rgba(232,89,12,.15)}}
+.call .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.call button{border:0;border-radius:99px;padding:9px 16px;font-weight:600;color:#fff}
+.call .ok{background:#2b8a3e}.call .no{background:#c92a2a}.call .ptt{background:#517da2}.call .ptt.rec{background:#c92a2a}
+.call .cap{font-size:12px;opacity:.8;max-width:240px;min-height:32px}
+.flags{display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.flags label{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.flags label span{flex:1}
+.flags input[type=number]{width:84px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);padding:3px 6px;font:inherit}
+.flags .src{font-size:10.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/">That<span>Friend</span></a>
+  <span class="pill" id="llm"><span class="dot"></span>LLM: <b>…</b></span>
+  <span class="pill" id="tg">Telegram: <b>…</b></span>
+  <span class="pill" id="p-sarvam"><span class="dot"></span>Sarvam: <b>…</b></span>
+  <span class="pill" id="p-flagsmith"><span class="dot"></span>Flagsmith: <b>…</b></span>
+  <span class="pill" id="p-nudgebee"><span class="dot"></span>NudgeBee: <b>…</b></span>
+  <span class="sp"></span>
+  <label class="tog"><input type="checkbox" id="auto" checked> AI-simulate friends</label>
+  <button class="btn ghost" id="reset">↺ Reset demo</button>
+</header>
+<main>
+  <section>
+    <h2>YOU · the organizer</h2>
+    <div class="phone org">
+      <div class="top"><div class="av">TF</div><div><b>ThatFriend</b><small>bot · plans &amp; books your trips</small></div></div>
+      <div class="chat" id="chat-organizer"></div>
+      <div class="typing" id="typing"></div>
+      <form class="compose" id="form"><input id="input" autocomplete="off" placeholder="Message ThatFriend…"><button>➤</button></form>
+    </div>
+    <p class="hint">Try: <a href="#" id="sample">"Plan Ooty next weekend with Aman, Riya and Kabir, 15k per person"</a></p>
+  </section>
+  <section>
+    <h2>YOUR FRIENDS · texted by ThatFriend on your behalf</h2>
+    <div class="friends" id="friends"><div class="empty">Friends' phones appear here when ThatFriend starts texting them. 📱</div></div>
+  </section>
+  <aside class="brain">
+    <div class="card">
+      <h2>TRIP PROGRESS</h2>
+      <div class="stages" id="stages"></div>
+      <div class="sum" id="sum" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>🧪 EXPERIMENT · invite_style (Flagsmith A/B/n)</h2>
+      <div id="exp" class="sum"><span class="hint">Runs when ThatFriend invites friends. Each friend is bucketed by Flagsmith into text / voice note / call.</span></div>
+    </div>
+    <div class="card">
+      <h2>FEATURE FLAGS · Flagsmith</h2>
+      <div class="flags" id="flags"><span class="hint">Loading…</span></div>
+      <p class="hint" id="flag-src" style="margin:8px 0 0"></p>
+    </div>
+    <div class="card">
+      <h2>AGENT BRAIN · live</h2>
+      <div class="log" id="log"><div class="hint">Waiting for a trip request…</div></div>
+    </div>
+  </aside>
+</main>
+<script>
+const ORG = 'organizer', ORG_NAME = 'Zoya';
+const STAGES = [['BRIEF','Brief'],['PLANNING','Itinerary'],['FRIENDS','Squad poll'],['APPROVAL','Approve'],['GATE','NudgeBee gate'],['OTP','OTP'],['BOOKING','Booking'],['DONE','Booked 🎉']];
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = (s) => esc(s).replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/(upi:\/\/\S+)/g, '<a href="#" title="$1">💸 Pay via UPI</a>');
+let simTimer = null, waitingSince = 0;
+
+function chatEl(key){
+  if (key === 'web:organizer') return $('#chat-organizer');
+  const id = 'chat-' + key.replace(/[^a-z0-9]/gi,'-');
+  let el = document.getElementById(id);
+  if (!el) {
+    const name = key.split(/friend-|:/).pop();
+    const nice = name.charAt(0).toUpperCase() + name.slice(1);
+    const box = $('#friends'); box.querySelector('.empty')?.remove();
+    const ph = document.createElement('div'); ph.className = 'phone'; ph.dataset.key = key;
+    ph.innerHTML = `<div class="top"><div class="av">${esc(nice[0])}</div><div><b>${esc(nice)}</b><small>chat with ThatFriend</small></div><span class="vote" id="v-${id}"></span></div>
+      <div class="chat" id="${id}"></div>
+      <form class="compose"><input placeholder="Reply as ${esc(nice)}…"><button>➤</button></form>`;
+    ph.querySelector('form').onsubmit = (e) => { e.preventDefault(); const i = e.target.querySelector('input'); if (i.value.trim()) { send(key.replace('web:',''), nice, i.value.trim()); i.value=''; } };
+    box.appendChild(ph);
+    el = document.getElementById(id);
+  }
+  return el;
+}
+function addMsg(key, html, cls, buttons){
+  const chat = chatEl(key);
+  const m = document.createElement('div'); m.className = 'msg ' + (cls||''); m.innerHTML = html;
+  if (buttons) {
+    const kb = document.createElement('div'); kb.className = 'kb';
+    for (const row of buttons) { const r = document.createElement('div');
+      for (const b of row) { const bt = document.createElement('button'); bt.textContent = b.label;
+        bt.onclick = () => { const user = key.replace('web:',''); send(user, user===ORG?ORG_NAME:null, b.data, b.label); };
+        r.appendChild(bt); }
+      kb.appendChild(r); }
+    m.appendChild(kb);
+  }
+  chat.appendChild(m); chat.scrollTop = chat.scrollHeight;
+}
+async function send(user, name, text, label){
+  if (label) addMsg('web:'+user, esc(label), 'me');
+  if (user === ORG) $('#typing').textContent = 'ThatFriend is typing…';
+  await fetch('/api/send', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({user, name, text, silent: !!label || text === 'sim_friends'})});
+}
+$('#form').onsubmit = (e) => { e.preventDefault(); const v = $('#input').value.trim(); if (!v) return; $('#input').value=''; send(ORG, ORG_NAME, v); };
+$('#sample').onclick = (e) => { e.preventDefault(); $('#input').value = e.target.textContent.replace(/"/g,''); $('#input').focus(); };
+$('#reset').onclick = async () => { await fetch('/api/reset',{method:'POST'}); location.reload(); };
+
+const es = new EventSource('/events');
+es.addEventListener('hello', e => { const d = JSON.parse(e.data); setLLM(d.llm.backend); $('#tg b').textContent = d.telegram ? (d.bot ? '@'+d.bot : 'on') : 'web demo'; });
+es.addEventListener('ping', e => setLLM(JSON.parse(e.data).llm));
+es.addEventListener('message', e => {
+  const m = JSON.parse(e.data);
+  if (!m.to.startsWith('web:') && !m.to.startsWith('sim:')) return;
+  const key = m.to.startsWith('sim:') ? 'web:friend-' + m.to.split(':').pop() : m.to;
+  if (m.echo) addMsg(key, fmt(m.text), 'me');
+  else { addMsg(key, fmt(m.text), '', m.buttons); if (key === 'web:organizer') $('#typing').textContent = ''; }
+});
+es.addEventListener('sms', e => { const s = JSON.parse(e.data); addMsg(s.to, '📱 SMS · ' + esc(s.text), 'sms'); });
+es.addEventListener('log', e => {
+  const l = JSON.parse(e.data); setLLM(l.backend);
+  const log = $('#log'); log.querySelector('.hint')?.remove();
+  const d = document.createElement('div'); d.className = l.kind;
+  d.innerHTML = `<time>${new Date(l.t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</time>${esc(l.text)}`;
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+  if (l.kind === 'think' && /Generating|Adjusting|Reading/.test(l.text)) $('#typing').textContent = 'ThatFriend is thinking…';
+});
+es.addEventListener('friend', e => {
+  const { friend } = JSON.parse(e.data);
+  const key = friend.key && friend.key.startsWith('sim:') ? 'web:friend-' + friend.name.toLowerCase() : friend.key;
+  if (!key) return;
+  chatEl(key);
+  const v = document.getElementById('v-chat-' + key.replace(/[^a-z0-9]/gi,'-'));
+  if (v) v.textContent = friend.status === 'replied' ? ({yes:'✅',no:'❌',maybe:'🤔'}[friend.vote]||'✅') : '⏳';
+});
+es.addEventListener('trip', e => renderTrip(JSON.parse(e.data)));
+es.addEventListener('reset', () => location.reload());
+
+function setLLM(b){ const el = $('#llm'); el.querySelector('b').textContent = b === 'claude-code' ? 'Claude Code' : b === 'offline' ? 'offline planner' : '…'; el.querySelector('.dot').classList.toggle('on', b === 'claude-code'); }
+function renderTrip(t){
+  const idx = STAGES.findIndex(s => s[0] === t.stage);
+  $('#stages').innerHTML = STAGES.map((s,i) => `<span class="${i<idx?'done':i===idx?'on':''}">${i<idx?'✓ ':''}${s[1]}</span>`).join('');
+  const b = t.brief || {}, c = t.chosen, cart = t.cart;
+  $('#sum').innerHTML = [
+    b.destination ? `<div><b>${esc(b.destination)}</b> · ${esc(b.when||'')} · ${b.nights||'?'}N</div>` : '',
+    b.budgetPerPerson ? `<div>💰 Budget ₹${b.budgetPerPerson.toLocaleString('en-IN')}/person · 👥 ${b.groupSize||'?'}</div>` : '',
+    c ? `<div>🎯 ${esc(c.title)} · ₹${c.totalPerPerson.toLocaleString('en-IN')}/person</div>` : '',
+    cart ? `<div>🧾 Cart ₹${cart.total.toLocaleString('en-IN')} · ${cart.items.length} bookings</div>` : '',
+    t.confirmations?.length ? `<div>✅ ${t.confirmations.length} confirmations</div>` : '',
+  ].join('');
+  // Auto-simulate friends a few seconds after they're asked (so the demo flows hands-free).
+  clearTimeout(simTimer);
+  if (t.stage === 'FRIENDS' && $('#auto').checked) simTimer = setTimeout(() => send(ORG, ORG_NAME, 'sim_friends', null).catch(()=>{}), 3500);
+}
+// ---------- Voice (Sarvam TTS, browser speech fallback) ----------
+const LANG_NAMES = {'en-IN':'English','hi-IN':'Hindi','ta-IN':'Tamil','te-IN':'Telugu','kn-IN':'Kannada','ml-IN':'Malayalam','bn-IN':'Bengali','mr-IN':'Marathi','gu-IN':'Gujarati','pa-IN':'Punjabi','od-IN':'Odia'};
+let currentAudio = null;
+async function speak(text, lang){
+  try { speechSynthesis.cancel(); currentAudio?.pause(); } catch {}
+  try {
+    const r = await fetch(`/api/voice/tts?lang=${encodeURIComponent(lang)}&text=${encodeURIComponent(text)}`);
+    if (r.status === 200) { currentAudio = new Audio(URL.createObjectURL(await r.blob())); await currentAudio.play(); return 'sarvam'; }
+  } catch {}
+  try { const u = new SpeechSynthesisUtterance(text.replace(/[*_]/g,'')); u.lang = lang; speechSynthesis.speak(u); return 'browser'; } catch { return 'none'; }
+}
+function voiceBubble(key, text, lang, label){
+  const chat = chatEl(key);
+  const m = document.createElement('div'); m.className = 'msg';
+  m.innerHTML = `<div class="vn"><button title="Play">▶</button><span class="wave"></span></div><small>🎙️ ${esc(label || 'Voice note')} · ${esc(LANG_NAMES[lang]||lang)} · Sarvam Bulbul</small>`;
+  m.querySelector('button').onclick = () => speak(text, lang);
+  m.title = text;
+  chat.appendChild(m); chat.scrollTop = chat.scrollHeight;
+}
+es.addEventListener('voice', e => { const v = JSON.parse(e.data); if (v.to.startsWith('web:')) voiceBubble(v.to, v.text, v.lang); });
+
+// ---------- "Calls" without telephony: in-browser call screen + push-to-talk (Sarvam STT) ----------
+es.addEventListener('call', e => {
+  const c = JSON.parse(e.data);
+  if (!c.to.startsWith('web:')) return;
+  chatEl(c.to);
+  const ph = document.querySelector(`.phone[data-key="${c.to}"]`); if (!ph) return;
+  ph.querySelector('.call')?.remove();
+  const ov = document.createElement('div'); ov.className = 'call';
+  ov.innerHTML = `<div class="big">📞</div><b>ThatFriend is calling…</b><small>${esc(LANG_NAMES[c.lang]||c.lang)} · Sarvam voice</small>
+    <div class="row"><button class="ok">Answer</button><button class="no">Decline</button></div><div class="cap"></div>`;
+  ph.appendChild(ov);
+  voiceBubble(c.to, c.text, c.lang, 'Call recording');
+  const cap = ov.querySelector('.cap');
+  ov.querySelector('.no').onclick = () => ov.remove();
+  ov.querySelector('.ok').onclick = async () => {
+    ov.querySelector('.row').innerHTML = `<button class="ptt">🎙️ Hold to talk</button><button class="no">End</button>`;
+    ov.querySelector('.big').style.animation = 'none';
+    ov.querySelector('b').textContent = 'On call with ThatFriend';
+    cap.textContent = '“' + c.text.slice(0, 140) + (c.text.length > 140 ? '…' : '') + '”';
+    ov.querySelector('.no').onclick = () => ov.remove();
+    speak(c.text, c.lang);
+    wirePTT(ov.querySelector('.ptt'), c.to, c.name, c.lang, cap, ov);
+  };
+});
+function wirePTT(btn, key, name, lang, cap, ov){
+  let rec = null, chunks = [], sr = null, srText = '';
+  const user = key.replace('web:','');
+  const start = async () => {
+    btn.classList.add('rec'); btn.textContent = '● Listening…'; chunks = []; srText = '';
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      rec = new MediaRecorder(stream); rec.ondataavailable = ev => chunks.push(ev.data); rec.start();
+    } catch { rec = null; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) { sr = new SR(); sr.lang = lang; sr.interimResults = true; sr.onresult = ev => { srText = [...ev.results].map(r => r[0].transcript).join(' '); cap.textContent = srText; }; try { sr.start(); } catch {} }
+  };
+  const stop = async () => {
+    btn.classList.remove('rec'); btn.textContent = '🎙️ Hold to talk';
+    try { sr?.stop(); } catch {}
+    if (rec && rec.state !== 'inactive') {
+      await new Promise(r => { rec.onstop = r; rec.stop(); });
+      rec.stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+      cap.textContent = 'Transcribing with Sarvam…';
+      const r = await fetch(`/api/voice/stt?user=${encodeURIComponent(user)}&name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'content-type': blob.type }, body: blob }).then(r => r.json()).catch(() => ({}));
+      if (r.transcript) { cap.textContent = '“' + r.transcript + '”'; setTimeout(() => ov.remove(), 1500); return; }
+    }
+    if (srText) { send(user, name, srText); cap.textContent = '“' + srText + '” (browser STT)'; setTimeout(() => ov.remove(), 1500); }
+    else cap.textContent = "Didn't catch that — try again, or type a reply.";
+  };
+  btn.addEventListener('pointerdown', start); btn.addEventListener('pointerup', stop); btn.addEventListener('pointerleave', () => btn.classList.contains('rec') && stop());
+}
+// Close a friend's call screen once they've replied (e.g. AI persona answered).
+es.addEventListener('friend', e => {
+  const { friend } = JSON.parse(e.data);
+  if (friend.status === 'replied' && friend.key) document.querySelector(`.phone[data-key="${friend.key}"] .call`)?.remove();
+});
+
+// ---------- Integrations + Flagsmith panel ----------
+function pill(id, on, label){ const el = $(id); if (!el) return; el.querySelector('b').textContent = label; el.querySelector('.dot').classList.toggle('on', !!on); }
+async function loadIntegrations(){
+  const s = await fetch('/api/integrations').then(r => r.json()).catch(() => null); if (!s) return;
+  pill('#p-sarvam', s.sarvam.enabled, s.sarvam.enabled ? 'live' : 'add key (browser voice)');
+  pill('#p-flagsmith', s.flagsmith.configured && !s.flagsmith.lastError, s.flagsmith.configured ? (s.flagsmith.lastError ? 'unreachable' : 'live') : 'local defaults');
+  pill('#p-nudgebee', s.nudgebee.configured, s.nudgebee.configured ? 'webhook live' : 'local runbook');
+}
+async function loadFlags(){
+  const f = await fetch('/api/flags').then(r => r.json()).catch(() => null); if (!f) return;
+  $('#flags').innerHTML = Object.entries(f.flags).map(([k, v]) => `<label title="${esc(v.desc||'')}"><span>${esc(k)}<br><span class="src">${esc(v.desc||'')} · ${esc(v.source)}</span></span>
+    ${typeof v.value === 'number' ? `<input type="number" data-v="${k}" value="${v.value}">` : ''}<input type="checkbox" data-f="${k}" ${v.enabled ? 'checked' : ''}></label>`).join('');
+  $('#flag-src').textContent = f.status.source === 'flagsmith' ? 'Live from Flagsmith (identity = each user). Toggles here are local overrides.' : 'No FLAGSMITH_ENVIRONMENT_KEY: using defaults; toggles act as local overrides.';
+  $('#flags').querySelectorAll('[data-f]').forEach(cb => cb.onchange = () => fetch('/api/flags', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name: cb.dataset.f, enabled: cb.checked })}));
+  $('#flags').querySelectorAll('[data-v]').forEach(inp => inp.onchange = () => fetch('/api/flags', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name: inp.dataset.v, value: Number(inp.value) })}));
+}
+es.addEventListener('flags', loadFlags);
+function renderExp(s){
+  const rows = Object.entries(s || {}); if (!rows.length) return;
+  const icon = { text: '💬', voice_note: '🎙️', call: '📞' };
+  const best = rows.slice().sort((a, b) => b[1].yesRate - a[1].yesRate || (a[1].avgReplySecs ?? 1e9) - (b[1].avgReplySecs ?? 1e9))[0][0];
+  $('#exp').innerHTML = `<table style="width:100%;font-size:12.5px;border-collapse:collapse"><tr style="color:var(--muted);text-align:left"><th>variant</th><th>sent</th><th>yes</th><th>yes rate</th><th>avg reply</th></tr>` +
+    rows.map(([k, v]) => `<tr${k === best ? ' style="font-weight:700;color:var(--accent)"' : ''}><td>${icon[k]||''} ${esc(k)}${k === best ? ' 🏆' : ''}</td><td>${v.sent}</td><td>${v.yes}</td><td>${v.yesRate}%</td><td>${v.avgReplySecs ?? '–'}s</td></tr>`).join('') + '</table>' +
+    `<span class="hint">Outcomes are written back to each friend's Flagsmith identity as traits (invite_variant, invite_vote, reply_seconds).</span>`;
+}
+es.addEventListener('experiment', e => renderExp(JSON.parse(e.data)));
+fetch('/api/experiment').then(r => r.json()).then(renderExp).catch(() => {});
+loadIntegrations(); loadFlags(); setInterval(loadIntegrations, 15000);
+
+renderTrip({stage:'BRIEF'});
+fetch('/api/status').then(r=>r.json()).then(s => { setLLM(s.llm.backend); });
+</script>
+</body>
+</html>
