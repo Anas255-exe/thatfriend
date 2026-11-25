@@ -8,12 +8,15 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 export function buildCart(plan, groupSize) {
   const n = groupSize || 2;
   const rooms = Math.ceil(n / 2);
+  const spots = plan.spots || plan.activities || [];
   const items = [
-    { kind: 'transport', icon: '🚌', provider: providerFor(plan.transport.mode), title: plan.transport.mode, detail: plan.transport.detail, qty: n, unit: plan.transport.costPerPerson },
-    { kind: 'stay', icon: '🏡', provider: 'StaySandbox', title: plan.stay.name, detail: `${rooms} room(s) × ${plan.stay.nights} night(s) · ${plan.stay.type}`, qty: n, unit: plan.stay.costPerPerson },
-    { kind: 'local', icon: '🚕', provider: 'CabSandbox', title: 'Local travel', detail: plan.localTravel.detail, qty: n, unit: plan.localTravel.costPerPerson },
-    ...plan.activities.filter(a => a.costPerPerson > 0).map(a => ({ kind: 'activity', icon: '🎟️', provider: 'TicketsSandbox', title: a.name, detail: `${n} tickets`, qty: n, unit: a.costPerPerson })),
-  ];
+    plan.transport && { kind: 'transport', icon: /flight/i.test(plan.transport.mode) ? '✈️' : /train|vande/i.test(plan.transport.mode) ? '🚆' : '🚌', provider: providerFor(plan.transport.mode), title: plan.transport.mode, detail: plan.transport.detail, qty: n, unit: plan.transport.costPerPerson },
+    plan.stay && { kind: 'stay', icon: '🏡', provider: 'StaySandbox', title: plan.stay.name, detail: `${rooms} room(s) × ${plan.stay.nights} night(s)${plan.stay.type ? ' · ' + plan.stay.type : ''}`, qty: n, unit: plan.stay.costPerPerson },
+    plan.localTravel && plan.localTravel.costPerPerson > 0 && { kind: 'local', icon: '🚕', provider: 'CabSandbox', title: 'Local travel', detail: plan.localTravel.detail, qty: n, unit: plan.localTravel.costPerPerson },
+    ...spots.filter(a => a.costPerPerson > 0).map(a => plan.kind === 'meetup' && a.kind === 'venue'
+      ? { kind: 'activity', icon: '🍽️', provider: 'TablesSandbox', title: a.name, detail: `table for ${n}${plan.when ? ' · ' + plan.when : ''} (pre-paid cover)`, qty: n, unit: a.costPerPerson }
+      : { kind: 'activity', icon: '🎟️', provider: 'TicketsSandbox', title: a.name, detail: `${n} tickets`, qty: n, unit: a.costPerPerson }),
+  ].filter(Boolean);
   for (const it of items) it.amount = it.qty * it.unit;
   const total = items.reduce((s, i) => s + i.amount, 0);
   return { items, total, perPerson: Math.round(total / n), currency: 'INR' };

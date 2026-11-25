@@ -32,6 +32,28 @@ export function startTelegram(engine) {
     api('sendMessage', { chat_id, text: toHtml(text), parse_mode: 'HTML', reply_markup, link_preview_options: { is_disabled: true } })
       .catch(e => console.error('[telegram] send failed:', e.message));
   });
+  // Place cards: photos + why + review vibe + Maps link, so nobody has to leave the chat.
+  const cardCaption = (c) => {
+    const links = c.links.filter(l => l.url).map(l => `<a href="${esc(l.url)}">${esc(l.label)}</a>`).join('  ·  ');
+    return `<b>${esc(c.title)}</b>\n${esc(c.text || '')}${links ? '\n' + links : ''}`.slice(0, 1020);
+  };
+  engine.on('cards', async ({ to, cards }) => {
+    if (!to.startsWith('telegram:')) return;
+    const chat_id = to.slice(9);
+    const withPhoto = cards.filter(c => c.photo), noPhoto = cards.filter(c => !c.photo);
+    try {
+      if (withPhoto.length >= 2) {
+        await api('sendMediaGroup', { chat_id, media: withPhoto.slice(0, 10).map(c => ({ type: 'photo', media: c.photo, caption: cardCaption(c), parse_mode: 'HTML' })) });
+      } else if (withPhoto.length === 1) {
+        await api('sendPhoto', { chat_id, photo: withPhoto[0].photo, caption: cardCaption(withPhoto[0]), parse_mode: 'HTML' });
+      }
+    } catch (e) {
+      console.warn('[telegram] photo cards failed, sending as text:', e.message);
+      noPhoto.push(...withPhoto);
+    }
+    for (const c of noPhoto) await api('sendMessage', { chat_id, text: cardCaption(c), parse_mode: 'HTML', link_preview_options: { is_disabled: true } }).catch(() => {});
+  });
+
   engine.on('sms', ({ to, text }) => {
     if (!to.startsWith('telegram:')) return;
     api('sendMessage', { chat_id: to.slice(9), text: '📱 ' + text }).catch(() => {});

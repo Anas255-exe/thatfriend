@@ -1,15 +1,16 @@
-// ThatFriend trip engine: channel-agnostic state machine.
-// BRIEF → PLANNING → FRIENDS → APPROVAL → OTP → BOOKING → DONE
+// ThatFriend engine: channel-agnostic state machine.
+// BRIEF → PREFS (ask every friend first) → PLANNING (merge + research) → FRIENDS (final 👍)
+//       → APPROVAL → [GATE] → OTP → BOOKING → DONE
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import { askJSON, askText, llmStatus } from './llm.js';
-import {
-  extractBriefOffline, planOptionsOffline, refineOffline, totalOf,
-  friendReplyOffline, parseFriendReplyOffline, catalogFor,
-} from './fallback.js';
+import { extractBriefOffline, parseFriendReplyOffline } from './fallback.js';
+import { GENZ, parsePrefs, researchOptions, refinePlan, offlineOptions, planCards } from './planner.js';
 import { buildCart, PaymentSession, bookItem, upiCollectLink } from './booking.js';
 import { config } from './config.js';
 import { getFlags, recordTraits, experimentVariant, trackEvent, flushEvents } from './flags.js';
+import { translate, LANGS } from './sarvam.js';
+import { requestApproval, resolveApproval, pendingApprovalFor, runBookingRunbook, emitEvent } from './nudgebee.js';
 
 /** Live results of the invite_style A/B/n experiment. */
 class Experiment {
@@ -26,19 +27,24 @@ class Experiment {
     }]));
   }
 }
-import { translate, LANGS, sarvamEnabled } from './sarvam.js';
-import { requestApproval, resolveApproval, pendingApprovalFor, runBookingRunbook, emitEvent } from './nudgebee.js';
 
-const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
-const SYSTEM = `You are ThatFriend, an AI travel agent for Indian friend groups. You plan trips end-to-end:
-itinerary, friend consensus, and bookings. Prices are realistic for India in INR. Be concise and warm.`;
+const inr = (n) => '₹' + Math.round(n || 0).toLocaleString('en-IN');
+const MEETUP_RE = /\b(meet ?up|hang ?out|dinner|lunch|brunch|movie|cafe|café|party|drinks|chill (?:sesh|plan)|catch ?up|night out|bowling|game night)\b/i;
+
+// AI persona agents used to simulate friends who aren't on Telegram yet (demo).
+const PERSONAS = [
+  { vibe: 'adventure + snow freak, ok spending a bit more, wants the big-ticket experiences', offline: 'bro snow is a MUST 🏔️ gondola/skiing type stuff. budget thoda flexible hai, bas boring mat banana' },
+  { vibe: 'budget-conscious, loves aesthetic cafés + photo spots, hates touristy traps', offline: 'budget tight hai yaar 😭 cheap stay is fine. cute cafés + sunset spots for pics pls, no touristy traps' },
+  { vibe: 'foodie, pure veg, hates waking up early, wants chill', offline: 'im in for the food fr 🍜 but pure veg pls. and NO 5am wake ups, chill pace only' },
+  { vibe: 'party person, wants nightlife and music', offline: 'need at least one proper night out 🎶 rest i’m easy' },
+];
 
 export class Engine extends EventEmitter {
   constructor() {
     super();
-    this.users = new Map();   // key -> {key, name, channel, chatId}
-    this.trips = new Map();   // tripId -> trip
-    this.queues = new Map();  // key -> promise chain (serialize per user)
+    this.users = new Map();
+    this.trips = new Map();
+    this.queues = new Map();
     this.botUsername = '';
     this.experiment = new Experiment();
   }
@@ -52,40 +58,32 @@ export class Engine extends EventEmitter {
     return u;
   }
   send(to, text, buttons) { this.emit('message', { to, text, buttons }); }
-
-  /** Flagsmith flags for a user (identity = user key, traits = channel/role/language). */
+  cards(to, cards, intro) { if (cards?.length) this.emit('cards', { to, cards, intro }); }
   flagsFor(key, role) {
     const u = this.users.get(key) || {};
     return getFlags(key, { channel: u.channel, role, language: u.lang || 'en-IN', name: u.name });
   }
-
-  /** Voice note (Sarvam TTS) — channel adapters turn this into a Telegram voice note / browser audio. */
   voice(to, text, lang = 'en-IN', kind = 'note') { this.emit('voice', { to, text, lang, kind }); }
   log(trip, text, kind = 'info') {
     const entry = { t: Date.now(), tripId: trip?.id, text, kind, backend: llmStatus.backend };
     trip?.log.push(entry);
     this.emit('log', entry);
   }
-  tripOf(key) {
-    for (const t of this.trips.values()) if (t.organizer === key && t.stage !== 'ARCHIVED') return t;
-    return null;
-  }
-  friendTripOf(key) {
-    for (const t of this.trips.values()) if (t.stage !== 'ARCHIVED' && t.friends.some(f => f.key === key)) return t;
-    return null;
-  }
+  tripOf(key) { for (const t of this.trips.values()) if (t.organizer === key && t.stage !== 'ARCHIVED') return t; return null; }
+  friendTripOf(key) { for (const t of this.trips.values()) if (t.stage !== 'ARCHIVED' && t.friends.some(f => f.key === key)) return t; return null; }
   snapshot(trip) {
     if (!trip) return null;
     const { payment, ...rest } = trip;
     return { ...rest, payment: payment && { id: payment.id, status: payment.status, total: payment.cart.total } };
   }
+  orgName(trip) { return this.users.get(trip.organizer)?.name || 'ur friend'; }
+  what(trip) { return trip.brief.kind === 'meetup' ? (trip.brief.activity || 'meetup') : `${trip.brief.destination} trip`; }
 
-  /** Entry point for every inbound message/button press from any channel. */
   handle(key, text, meta = {}) {
     const prev = this.queues.get(key) || Promise.resolve();
     const next = prev.then(() => this._handle(key, String(text || '').trim(), meta)).catch(e => {
       console.error('[engine]', e);
-      this.send(key, '😵 Something glitched on my side — say that again?');
+      this.send(key, 'oops my brain lagged for a sec 😵 say that again?');
     });
     this.queues.set(key, next);
     return next;
@@ -93,55 +91,48 @@ export class Engine extends EventEmitter {
 
   async _handle(key, text, meta) {
     const user = this.users.get(key) || this.registerUser(key, meta.name || 'Friend', meta.channel || 'web', meta.chatId);
-
-    // Deep link: /start join_<tripId>
     const join = text.match(/^\/start\s+join_([A-Za-z0-9]+)/);
     if (join) return this.friendJoin(user, join[1]);
 
     if (/^\/(start|help)$/i.test(text)) {
-      return this.send(key, `Hey ${user.name}! 👋 I'm *ThatFriend* — the friend who plans AND books the whole trip, so nobody else has to.\n\nJust tell me something like:\n"Plan Ooty next weekend, 15k per person, 4 of us — me, Aman, Riya and Kabir"\n\nI'll draft itineraries, check with your friends for you, and book everything once you approve. ✨`);
+      return this.send(key, `yo ${user.name} 👋 i'm *ThatFriend*, basically the friend who actually books stuff so nobody else has to 😮‍💨\n\njust text me like:\n“kashmir next weekend w aman, riya n kabir, 15k each”\nor “dinner + movie saturday w the gang in blr”\n\ni'll ask everyone what they want, merge it, show u real spots w pics + maps, n book it all once u say yes ✅`);
     }
     if (/^\/(new|reset)$/i.test(text)) {
       const t = this.tripOf(key); if (t) t.stage = 'ARCHIVED';
-      return this.send(key, '🧹 Fresh start! Where are we going?');
+      return this.send(key, 'clean slate 🧹 where we going / what we doing?');
     }
     if (/^\/status$/i.test(text)) return this.sendStatus(key);
 
-    // Friend replying to a squad poll?
+    // A friend talking to the bot?
     const ft = this.friendTripOf(key);
-    if (ft && ft.stage === 'FRIENDS') {
-      const f = ft.friends.find(x => x.key === key);
-      if (f && f.status !== 'replied') return this.friendReply(ft, f, text);
-    }
     if (ft && !this.tripOf(key)) {
-      return this.send(key, ft.stage === 'DONE' ? `🎒 You're all set for ${ft.brief.destination}! Check your confirmation above.` :
-        `👌 Got it. ${this.users.get(ft.organizer)?.name || 'Your friend'} and I are handling the rest — I'll ping you when it's booked.`);
+      const f = ft.friends.find(x => x.key === key);
+      if (ft.stage === 'PREFS' && f && !f.prefs) return this.friendPrefs(ft, f, text);
+      if (ft.stage === 'FRIENDS' && f && f.status !== 'replied') return this.friendReply(ft, f, text);
+      return this.send(key, ft.stage === 'DONE' ? `ur all set for the ${this.what(ft)} 🎒 confirmations are up there ☝️` :
+        `got u 🙌 ${this.orgName(ft)} n i are on it, i'll ping u when it's locked`);
     }
 
     let trip = this.tripOf(key);
     if (!trip) trip = this.newTrip(key);
-
     switch (trip.stage) {
       case 'BRIEF': return this.onBrief(trip, text);
+      case 'PREFS': return this.onPrefsStage(trip, text);
       case 'PLANNING': return this.onPlanning(trip, text);
       case 'FRIENDS': return this.onFriendsStage(trip, text);
       case 'APPROVAL': return this.onApproval(trip, text);
       case 'GATE': return this.onGate(trip, text);
       case 'OTP': return this.onOtp(trip, text);
-      case 'BOOKING': return this.send(key, '⏳ Booking in progress — hang tight!');
-      case 'DONE': {
-        if (/new|another|plan/i.test(text)) { trip.stage = 'ARCHIVED'; return this._handle(key, text, meta); }
-        return this.send(key, `✅ Your ${trip.brief.destination} trip is booked. Send /new to plan another one.`);
-      }
+      case 'BOOKING': return this.send(key, 'booking rn, 2 sec ⏳');
+      case 'DONE':
+        if (/new|another|plan|trip|meet/i.test(text)) { trip.stage = 'ARCHIVED'; return this._handle(key, text, meta); }
+        return this.send(key, `ur ${this.what(trip)} is booked ✅ send /new for the next one`);
     }
   }
 
   newTrip(organizer) {
-    const trip = {
-      id: crypto.randomBytes(4).toString('hex'),
-      organizer, stage: 'BRIEF', brief: {}, options: [], chosen: null,
-      friends: [], cart: null, payment: null, confirmations: [], log: [], createdAt: Date.now(),
-    };
+    const trip = { id: crypto.randomBytes(4).toString('hex'), organizer, stage: 'BRIEF', brief: {}, merge: [], options: [], chosen: null,
+      friends: [], cart: null, payment: null, confirmations: [], log: [], createdAt: Date.now() };
     this.trips.set(trip.id, trip);
     this.emit('trip', this.snapshot(trip));
     return trip;
@@ -151,257 +142,296 @@ export class Engine extends EventEmitter {
   // ---------- BRIEF ----------
   async onBrief(trip, text) {
     const key = trip.organizer;
-    this.log(trip, '🧠 Reading your request…', 'think');
+    this.log(trip, '🧠 reading the request…', 'think');
     let brief = await askJSON(
-      `Current trip brief (JSON): ${JSON.stringify(trip.brief)}\nNew message from organizer: "${text}"\n\n` +
-      `Update and return the brief as JSON with keys: destination (string|null), origin (string|null, default null), when (string|null), ` +
-      `nights (number|null), budgetPerPerson (number INR|null), totalBudget (number INR|null), groupSize (number|null, includes organizer), ` +
-      `friends (array of friend first names, excluding organizer), preferences (array of short strings). ` +
-      `Indian slang: "15k" = 15000. "Uti"/"Ooti" = Ooty. Keep previous values unless changed.`, SYSTEM);
-    brief = brief ? { ...trip.brief, ...clean(brief) } : extractBriefOffline(text, trip.brief);
+      `Current brief: ${JSON.stringify(trip.brief)}\nNew message from organizer: "${text}"\n` +
+      `Return the updated brief JSON: {"kind":"trip"|"meetup","destination":str|null (trip),"city":str|null (meetup city, default from context),` +
+      `"activity":str|null (meetup e.g. "dinner + movie"),"origin":str|null,"when":str|null,"nights":num|null,"budgetPerPerson":num|null,"totalBudget":num|null,` +
+      `"groupSize":num|null (incl organizer),"friends":[first names, excl organizer],"preferences":[organizer's own asks]}. ` +
+      `"15k"=15000. "Uti"/"Ooti"=Ooty. A meetup is a same-city hangout (dinner, movie, cafe, party). Keep previous values unless changed.`, GENZ);
+    brief = brief ? { ...trip.brief, ...clean(brief) } : { ...extractBriefOffline(text, trip.brief), kind: trip.brief.kind || (MEETUP_RE.test(text) ? 'meetup' : 'trip') };
+    if (brief.kind === 'meetup' && !brief.city) brief.city = (text.match(/\b(?:in|at)\s+(blr|bangalore|bengaluru|delhi|mumbai|pune|hyderabad|chennai|gurgaon|noida)\b/i) || [])[1] || 'Bengaluru';
+    if (brief.kind === 'meetup' && !brief.activity) brief.activity = (text.match(MEETUP_RE) || [])[0] || 'hangout';
     if (brief.totalBudget && brief.groupSize && !brief.budgetPerPerson) brief.budgetPerPerson = Math.round(brief.totalBudget / brief.groupSize);
     if (brief.friends?.length && (!brief.groupSize || brief.groupSize < brief.friends.length + 1)) brief.groupSize = brief.friends.length + 1;
     trip.brief = brief;
     this.touch(trip);
 
+    const meetup = brief.kind === 'meetup';
     const missing = [];
-    if (!brief.destination) missing.push('where to');
-    if (!brief.budgetPerPerson && !brief.totalBudget) missing.push('budget (per person or total)');
-    if (!brief.groupSize) missing.push('how many people (and their names, so I can text them)');
-    if (missing.length) {
-      return this.send(key, `Love it! Just need: ${missing.join(', ')}. 🙏`);
-    }
-    // Sensible defaults instead of more questions.
-    brief.origin ||= 'Bengaluru';
-    brief.nights ||= 2;
-    brief.when ||= 'next weekend';
-    if (!brief.friends?.length) brief.friends = defaultFriendNames(brief.groupSize - 1);
-    const organizerName = this.users.get(key)?.name || 'You';
-    this.send(key, `Got it ✍️\n📍 ${brief.destination} from ${brief.origin}\n🗓 ${brief.when}, ${brief.nights} nights\n👥 ${organizerName} + ${brief.friends.join(', ')}\n💰 ${inr(brief.budgetPerPerson)} per person\n\nDrafting 3 itineraries for you…`);
+    if (!meetup && !brief.destination) missing.push('where to');
+    if (!meetup && !brief.budgetPerPerson && !brief.totalBudget) missing.push('budget (per head or total)');
+    if (!brief.friends?.length && !brief.groupSize) missing.push("who's coming (names so i can text them)");
+    if (missing.length) return this.send(key, `ok ok i'm in 🔥 just need ${missing.join(' + ')} n we're cooking`);
+
+    brief.when ||= meetup ? 'this saturday evening' : 'next weekend';
+    if (!meetup) { brief.origin ||= 'Bengaluru'; brief.nights ||= 2; }
+    if (meetup && !brief.budgetPerPerson) brief.budgetPerPerson = 1500;
+    if (!brief.friends?.length) brief.friends = ['Aman', 'Riya', 'Kabir', 'Sana', 'Dev'].slice(0, Math.max(1, brief.groupSize - 1));
     trip.friends = brief.friends.map((n, i) => ({ name: n, key: null, status: 'pending', simulated: false, lang: config.friendLangs[i % config.friendLangs.length] || 'en-IN' }));
-    await this.makeOptions(trip);
+
+    const head = meetup
+      ? `bet 🫡 ${brief.activity} · ${brief.city} · ${brief.when} · w ${brief.friends.join(', ')}`
+      : `bet 🫡 ${brief.destination} · ${brief.when} · ${brief.nights} nights · ${inr(brief.budgetPerPerson)}/head · w ${brief.friends.join(', ')}`;
+    this.send(key, `${head}\n\nbefore i plan anything lemme ask the squad what they actually want, so nobody's like “yaar mujhe toh ye nahi karna tha” later 😤\nsliding into their DMs rn 📲`);
+    return this.askPrefs(trip);
   }
 
-  async makeOptions(trip, feedback = '') {
-    const b = trip.brief;
-    this.log(trip, `🗺️ Generating 3 itineraries for ${b.destination} via ${config.llmMode === 'offline' ? 'offline planner' : 'Claude Code'}…`, 'think');
-    const ref = catalogFor(b.destination);
-    const llm = await askJSON(
-      `Trip brief: ${JSON.stringify(b)}\n${feedback ? `Organizer feedback on previous options: "${feedback}"\n` : ''}` +
-      `Reference price points (INR, adjust as realistic): ${JSON.stringify({ transport: ref.transport, stays: ref.stays, activities: ref.activities })}\n\n` +
-      `Return a JSON array of exactly 3 distinct itinerary options (e.g. chill / adventure / budget). Each option: ` +
-      `{"id":"A"|"B"|"C","title":str,"vibe":str (max 8 words),"destination":str,"nights":num,` +
-      `"transport":{"mode":str,"detail":str,"costPerPerson":num},"stay":{"name":str,"type":str,"nights":num,"costPerPerson":num},` +
-      `"activities":[{"name":str,"costPerPerson":num}],"localTravel":{"detail":str,"costPerPerson":num},"foodPerPerson":num,` +
-      `"days":[{"day":num,"title":str,"items":[str]}]}. Costs are per person, rooms shared by 2. At least one option must fit the per-person budget.`, SYSTEM);
-    const fallback = planOptionsOffline(b);
-    let options = Array.isArray(llm) && llm.length ? llm.slice(0, 3).map((p, i) => normalizePlan(p, fallback[i], b, i)) : fallback;
-    trip.options = options;
-    trip.stage = 'PLANNING';
-    this.log(trip, `✅ ${options.length} itineraries ready (${llmStatus.backend})`, 'done');
-    this.touch(trip);
-    const lines = options.map(o =>
-      `*${o.id}. ${o.title}* — ${inr(o.totalPerPerson)}/person ${o.withinBudget ? '✅' : '⚠️ over budget'}\n   ${o.vibe}\n   🚌 ${o.transport.mode} · 🏡 ${o.stay.name}\n   🎯 ${o.activities.slice(0, 3).map(a => a.name).join(', ')}`);
-    this.send(trip.organizer, `Here are 3 ways to do ${b.destination} 👇\n\n${lines.join('\n\n')}\n\nPick one, or tell me what to change ("cheaper stay", "add a trek"…).`,
-      [options.map(o => ({ label: `Pick ${o.id}`, data: `pick:${o.id}` }))]);
-  }
-
-  // ---------- PLANNING ----------
-  async onPlanning(trip, text) {
-    const pick = text.match(/^(?:pick:)?\s*(?:option\s*)?([abc123])\s*$/i);
-    if (pick) {
-      const id = { 1: 'A', 2: 'B', 3: 'C' }[pick[1]] || pick[1].toUpperCase();
-      const o = trip.options.find(x => x.id === id);
-      if (o) { trip.chosen = structuredClone(o); this.touch(trip); return this.showChosen(trip); }
-    }
-    if (/^(ask_squad|ask (the )?(squad|friends|group))/i.test(text) && trip.chosen) return this.askSquad(trip);
-    if (/^(skip_friends|approve|book it|looks good|go ahead)/i.test(text) && trip.chosen) return this.toApproval(trip);
-    if (/^tweak$/i.test(text)) return this.send(trip.organizer, 'Sure — what should I change? ✏️');
-    if (!trip.chosen) return this.makeOptions(trip, text);
-    await this.refine(trip, text, 'organizer');
-    return this.showChosen(trip);
-  }
-
-  async refine(trip, feedback, who) {
-    this.log(trip, `✏️ Adjusting plan: "${feedback.slice(0, 60)}"`, 'think');
-    const llm = await askJSON(
-      `Current plan JSON: ${JSON.stringify(trip.chosen)}\nBrief: ${JSON.stringify(trip.brief)}\nFeedback from ${who}: "${feedback}"\n\n` +
-      `Return {"plan": <updated plan, same schema>, "changes": [short strings describing what changed]}. Keep within budget where possible.`, SYSTEM);
-    let res;
-    if (llm?.plan) res = { plan: normalizePlan(llm.plan, trip.chosen, trip.brief, 0), changes: llm.changes || [] };
-    else res = refineOffline(trip.chosen, feedback, trip.brief);
-    res.plan.id = trip.chosen.id;
-    trip.chosen = res.plan;
-    this.log(trip, `✅ Plan updated: ${res.changes.join('; ')}`, 'done');
-    this.touch(trip);
-    return res.changes;
-  }
-
-  showChosen(trip, header) {
-    const o = trip.chosen;
-    const days = o.days.map(d => `*Day ${d.day} — ${d.title}*\n${d.items.map(i => '  • ' + i).join('\n')}`).join('\n');
-    const notes = o.notes?.length ? `\n📝 ${o.notes.slice(-3).join(' · ')}` : '';
-    this.send(trip.organizer,
-      `${header || `🎯 *${o.title}* it is!`}\n\n${days}\n\n💸 *${inr(o.totalPerPerson)} per person* (budget ${inr(trip.brief.budgetPerPerson)})${notes}\n\nWant me to check with ${trip.friends.map(f => f.name).join(', ')} — so you don't have to?`,
-      [[{ label: '👥 Ask the squad', data: 'ask_squad' }, { label: '✏️ Tweak', data: 'tweak' }], [{ label: '✅ Skip & approve', data: 'skip_friends' }]]);
-  }
-
-  // ---------- FRIENDS ----------
-  async askSquad(trip) {
+  // ---------- PREFS: ask every friend first ----------
+  async askPrefs(trip) {
     const orgFlags = await this.flagsFor(trip.organizer, 'organizer');
     if (!orgFlags.friend_outreach.enabled) {
       this.log(trip, '🛑 Flagsmith kill switch friend_outreach = OFF → not messaging anyone', 'think');
-      return this.send(trip.organizer, `🛑 Friend outreach is switched off by your admin (Flagsmith kill switch), so I won't message anyone on your behalf right now.\nYou can approve the plan yourself, or try again once it's back on.`,
-        [[{ label: '✅ Approve without them', data: 'skip_friends' }, { label: '🔁 Try again', data: 'ask_squad' }]]);
+      this.send(trip.organizer, `🛑 heads up: friend outreach is switched off by ur admin (Flagsmith kill switch), so i can't DM anyone rn.\ni'll plan off what u told me 👇`);
+      return this.makeOptions(trip);
     }
-    trip.stage = 'FRIENDS';
+    trip.stage = 'PREFS';
     this.touch(trip);
-    const org = this.users.get(trip.organizer)?.name || 'Your friend';
-    const orgChannel = this.users.get(trip.organizer)?.channel;
-    this.log(trip, `📨 Texting ${trip.friends.length} friends on ${org}'s behalf`, 'act');
-
-    // Web demo: friends are pre-wired phones in the simulator.
-    // Telegram: friends join via deep link; anyone who hasn't joined gets simulated (demo mode).
-    if (orgChannel === 'telegram' && this.botUsername) {
+    this.log(trip, `📨 asking ${trip.friends.length} friends what they want, on ${this.orgName(trip)}'s behalf`, 'act');
+    if (this.users.get(trip.organizer)?.channel === 'telegram' && this.botUsername) {
       const link = `https://t.me/${this.botUsername}?start=join_${trip.id}`;
-      this.send(trip.organizer, `📨 On it! Drop this link in your group chat — when friends tap it, I'll talk to each of them privately:\n${link}\n\nI'll collect everyone's yes/no and requests and come back to you.`,
-        config.simulateMissingFriends ? [[{ label: '🤖 Simulate friends who haven\'t joined', data: 'sim_friends' }]] : undefined);
+      this.send(trip.organizer, `drop this in the group chat 👇 when they tap it i'll vibe-check each of them privately:\n${link}`,
+        config.simulateMissingFriends ? [[{ label: "🤖 simulate friends who haven't joined", data: 'sim_friends' }], [{ label: '⏭️ plan w whoever replied', data: 'plan_now' }]] : [[{ label: '⏭️ plan w whoever replied', data: 'plan_now' }]]);
     } else {
       for (const f of trip.friends) {
-        if (!f.key) f.key = `web:friend-${f.name.toLowerCase()}`;
+        f.key ||= `web:friend-${f.name.toLowerCase()}`;
         this.registerUser(f.key, f.name, 'web', f.key);
-        await this.pollFriend(trip, f).catch(e => console.error('[poll]', e));
+        await this.askFriendPrefs(trip, f).catch(e => console.error('[prefs]', e));
       }
-      this.send(trip.organizer, `📨 Texting ${trip.friends.map(f => f.name).join(', ')} now. Sit back — I'll handle the back-and-forth. 😌`);
     }
-    if (config.friendWaitMs) setTimeout(() => this.handle(trip.organizer, 'sim_friends'), config.friendWaitMs);
   }
 
-  async pollFriend(trip, f) {
-    const org = this.users.get(trip.organizer)?.name || 'Your friend';
-    const o = trip.chosen;
-    f.status = 'asked';
-    const u = this.users.get(f.key);
-    if (u) u.lang ||= f.lang;
+  async askFriendPrefs(trip, f) {
+    const org = this.orgName(trip);
+    const b = trip.brief;
+    f.status = 'asked'; f.askedAt = Date.now();
+    const u = this.users.get(f.key); if (u) u.lang ||= f.lang;
     this.emit('friend', { tripId: trip.id, friend: f });
     const flags = await this.flagsFor(f.key, 'friend');
-    let text =
-      `Hey ${f.name}! 👋 I'm ThatFriend, ${org}'s travel assistant.\n${org} is planning *${trip.brief.destination}* (${trip.brief.when}, ${o.nights} nights):\n\n` +
-      `🚌 ${o.transport.mode}\n🏡 ${o.stay.name}\n🎯 ${o.activities.map(a => a.name).join(', ')}\n💸 ~${inr(o.totalPerPerson)} per person\n\nAre you in? Any requests?`;
     const lang = f.lang || 'en-IN';
+    let text = b.kind === 'meetup'
+      ? `heyy ${f.name} 👋 it's ThatFriend, ${org}'s plan buddy\n${org} wants a *${b.activity}* w the gang · ${b.when} · ${b.city}\n\nquick vibe check before i lock anything 👇\n• what kinda place? (café, food, drinks, movie, games…)\n• what time works for u?\n• budget per head?\n• any hard no?\n\njust text me like u'd text ${org} 😌`
+      : `heyy ${f.name} 👋 it's ThatFriend, ${org}'s plan buddy\n${org}'s planning *${b.destination}* w the squad · ${b.when} · ~${inr(b.budgetPerPerson)}/head\n\nbefore i lock anything, tell me ur vibe 👇\n• what do u wanna do? (snow, chill cafés, food, adventure, party…)\n• any must-do?\n• any hard no?\n• budget cool or tight?\n\njust text me like u'd text ${org} 😌`;
     if (lang !== 'en-IN' && flags.friend_translation.enabled) {
       const t = await translate(text, lang);
-      if (t) { text = `${t}\n\n— ${LANGS[lang].name} · translated by Sarvam`; this.log(trip, `🌐 Sarvam translated ${f.name}'s invite to ${LANGS[lang].name}`, 'act'); }
+      if (t) { text = `${t}\n\n— ${LANGS[lang].name} · via Sarvam`; this.log(trip, `🌐 Sarvam translated ${f.name}'s DM to ${LANGS[lang].name}`, 'act'); }
     }
-    this.send(f.key, text, [[{ label: "👍 I'm in", data: "I'm in" }, { label: '🤔 Maybe', data: 'maybe' }, { label: "👎 Can't", data: "can't make it" }]]);
-    const spoken = `Hey ${f.name}! ${org} is planning a ${o.nights} night trip to ${trip.brief.destination}, ${trip.brief.when}. ` +
-      `${o.stay.name}, ${o.activities.slice(0, 2).map(a => a.name).join(' and ')}, about ${o.totalPerPerson} rupees each. Are you in?`;
-    // 🧪 Flagsmith A/B/n experiment: each friend (identity) is bucketed into text | voice_note | call.
-    // getExperimentFlag records the exposure event for Flagsmith Experimentation.
+    this.send(f.key, text, [[{ label: "😔 can't make it", data: "sorry can't make it this time" }]]);
+
+    // 🧪 Flagsmith A/B/n experiment on how we reach each friend: text | voice_note | call
+    const spoken = b.kind === 'meetup'
+      ? `hey ${f.name}! ${org} is planning a ${b.activity} with the gang, ${b.when}. what kind of place do you want, what time works, and anything you don't want? just reply here.`
+      : `hey ${f.name}! ${org} is planning ${b.destination} with the squad, ${b.when}, around ${b.budgetPerPerson} rupees each. what's your vibe, any must-do, anything you don't want? just reply here.`;
     const expValue = flags.invite_style.source === 'override' ? null : await experimentVariant('invite_style', f.key, { role: 'friend', language: lang });
     const style = flags.invite_style.enabled ? String(expValue || flags.invite_style.value || 'call') : (flags.voice_calls.enabled ? 'call' : flags.voice_notes.enabled ? 'voice_note' : 'text');
     const forced = flags.invite_style.source === 'override';
-    f.variant = forced ? null : style; f.askedAt = Date.now();
+    f.variant = forced ? null : style;
     if (!forced) this.experiment.record(style, 'sent');
     this.log(trip, `🧪 Flagsmith experiment invite_style → ${f.name} gets "${style}"`, 'think');
     recordTraits(f.key, { invite_variant: style, trip_id: trip.id });
-    if (style === 'text') {
-      // text only
-    } else if (style === 'call' && flags.voice_calls.enabled) {
-      this.log(trip, `📞 Calling ${f.name} (${LANGS[lang]?.name || lang}) — no telephony: voice-note call`, 'act');
-      const script = lang !== 'en-IN' && flags.friend_translation.enabled ? (await translate(spoken, lang)) || spoken : spoken;
-      this.emit('call', { to: f.key, tripId: trip.id, name: f.name, text: script, lang });
-    } else if (flags.voice_notes.enabled) {
-      const script = lang !== 'en-IN' && flags.friend_translation.enabled ? (await translate(spoken, lang)) || spoken : spoken;
-      this.voice(f.key, script, lang);
+    const script = async () => (lang !== 'en-IN' && flags.friend_translation.enabled ? (await translate(spoken, lang)) || spoken : spoken);
+    if (style === 'call' && flags.voice_calls.enabled) {
+      this.log(trip, `📞 calling ${f.name} (${LANGS[lang]?.name || lang}), voice-note call, no telephony needed`, 'act');
+      this.emit('call', { to: f.key, tripId: trip.id, name: f.name, text: await script(), lang });
+    } else if (style !== 'text' && flags.voice_notes.enabled) {
+      this.voice(f.key, await script(), lang);
     }
   }
 
   friendJoin(user, tripId) {
     const trip = this.trips.get(tripId);
-    if (!trip || trip.stage !== 'FRIENDS') return this.send(user.key, "That invite has expired, but say hi anytime! 👋");
+    if (!trip || !['PREFS', 'FRIENDS'].includes(trip.stage)) return this.send(user.key, 'that link expired 😅 but hiii, say hi anytime');
     let slot = trip.friends.find(f => f.key === user.key) ||
       trip.friends.find(f => !f.key && f.name.toLowerCase().startsWith(user.name.toLowerCase().slice(0, 3))) ||
       trip.friends.find(f => !f.key);
     if (!slot) { slot = { name: user.name, key: null, status: 'pending' }; trip.friends.push(slot); }
     slot.key = user.key; slot.name = user.name || slot.name;
     if (user.lang) slot.lang = user.lang;
-    this.log(trip, `🔗 ${slot.name} joined via invite link`, 'act');
-    return this.pollFriend(trip, slot);
+    this.log(trip, `🔗 ${slot.name} joined via the link`, 'act');
+    return trip.stage === 'PREFS' ? this.askFriendPrefs(trip, slot) : this.askFinalCheck(trip, slot);
   }
 
-  async onFriendsStage(trip, text) {
-    if (/^sim_friends$/i.test(text)) {
-      if (!(await this.flagsFor(trip.organizer, 'organizer')).simulate_friends.enabled) {
-        return this.send(trip.organizer, "🚩 Friend simulation is switched off for you in Flagsmith. Waiting for your real friends to reply.");
-      }
-      const pending = trip.friends.filter(f => f.status !== 'replied' && !f.simulating);
-      if (!pending.length) return;
-      for (const f of pending) {
-        f.simulated = true; f.simulating = true;
-        if (!f.key) f.key = `sim:${trip.id}:${f.name.toLowerCase()}`;
-        this.registerUser(f.key, f.name, 'sim', null);
-        if (f.status !== 'asked') { f.status = 'asked'; this.emit('friend', { tripId: trip.id, friend: f }); }
-      }
-      if (this.users.get(trip.organizer)?.channel !== 'web') this.send(trip.organizer, `🤖 Simulating ${pending.map(f => f.name).join(', ')} with AI personas for the demo…`);
-      // Run persona agents in parallel but outside this user's queue, so the organizer stays responsive.
-      Promise.all(pending.map((f, i) => this.simulateFriend(trip, f, i))).catch(e => console.error(e));
-      return;
+  async onPrefsStage(trip, text) {
+    if (/^sim_friends$/i.test(text)) return this.simulateFriends(trip, 'prefs');
+    if (/^(plan_now|plan|go|go ahead|skip)$/i.test(text)) return this.makeOptions(trip);
+    // organizer adding their own asks while waiting
+    trip.brief.preferences = [...(trip.brief.preferences || []), text];
+    const waiting = trip.friends.filter(f => !f.prefs).map(f => f.name);
+    this.send(trip.organizer, `noted ✍️ still waiting on ${waiting.join(', ') || 'nobody'}. say “go” n i'll plan w whoever replied`, [[{ label: '⏭️ plan now', data: 'plan_now' }]]);
+  }
+
+  async friendPrefs(trip, f, text) {
+    if (f.prefs) return;
+    f.prefsText = text; f.status = 'replied';
+    f.prefs = await parsePrefs(f.name, text, trip.brief);
+    f.vote = f.prefs.in === false ? 'no' : 'yes';
+    this.experimentOutcome(f);
+    this.emit('friend', { tripId: trip.id, friend: f });
+    this.touch(trip);
+    this.log(trip, `💬 ${f.name}: "${text.slice(0, 80)}"`, 'act');
+    if (!f.simulated) this.send(f.key, f.vote === 'no' ? 'aww noo 🥲 next time fr. i’ll let them know' : `noted 🫡 i'll mix this into the plan n send it over for a final 👍`);
+    this.send(trip.organizer, f.vote === 'no' ? `😔 *${f.name}* can't make it this time` : `📩 *${f.name}*: “${text.slice(0, 120)}”${f.prefs.summary ? `\n→ ${f.prefs.summary}` : ''}`);
+    if (trip.friends.every(x => x.prefs) && trip.stage === 'PREFS') return this.makeOptions(trip);
+  }
+
+  experimentOutcome(f) {
+    if (!f.variant || f.counted) return;
+    f.counted = true;
+    const secs = Math.round((Date.now() - (f.askedAt || Date.now())) / 1000);
+    this.experiment.record(f.variant, f.vote === 'yes' ? 'yes' : 'replied', secs);
+    recordTraits(f.key, { invite_variant: f.variant, invite_vote: f.vote, reply_seconds: secs });
+    trackEvent('friend_replied', f.key, secs);
+    if (f.vote === 'yes') trackEvent('friend_said_yes', f.key, 1);
+    flushEvents();
+    this.emit('experiment', this.experiment.summary());
+  }
+
+  async simulateFriends(trip, phase) {
+    if (!(await this.flagsFor(trip.organizer, 'organizer')).simulate_friends.enabled) {
+      return this.send(trip.organizer, "🚩 friend simulation is off for u in Flagsmith, waiting on the real squad");
     }
-    if (/^(skip_friends|approve|go ahead)/i.test(text)) return this.toApproval(trip);
-    const waiting = trip.friends.filter(f => f.status !== 'replied').map(f => f.name);
-    this.send(trip.organizer, `Still waiting on ${waiting.join(', ') || 'nobody'} ⏳ I'll nudge them. Say "go ahead" to skip waiting.`);
+    const pending = trip.friends.filter(f => (phase === 'prefs' ? !f.prefs : f.status !== 'replied') && !f.simulating);
+    if (!pending.length) return;
+    for (const f of pending) {
+      f.simulated = true; f.simulating = true;
+      f.key ||= `sim:${trip.id}:${f.name.toLowerCase()}`;
+      this.registerUser(f.key, f.name, 'sim', null);
+      if (f.status !== 'asked') { f.status = 'asked'; f.askedAt = Date.now(); this.emit('friend', { tripId: trip.id, friend: f }); }
+    }
+    if (this.users.get(trip.organizer)?.channel !== 'web') this.send(trip.organizer, `🤖 simulating ${pending.map(f => f.name).join(', ')} w AI personas for the demo…`);
+    Promise.all(pending.map((f) => this.simulateFriend(trip, f, trip.friends.indexOf(f), phase))).catch(e => console.error(e));
   }
 
-  /** "Subagent" friend: Claude role-plays the friend's reply (demo when real friends aren't on Telegram). */
-  async simulateFriend(trip, f, i) {
-    const vibes = ['super excited', 'budget-conscious', 'foodie, vegetarian', 'lazy, hates early mornings'];
-    this.log(trip, `🤖 Spawning persona agent for ${f.name} (${vibes[i % vibes.length]})`, 'think');
-    const text = await askText(
-      `You are ${f.name}, a ${vibes[i % vibes.length]} Indian friend in your 20s. Your friend's AI assistant just texted you this trip plan: ` +
-      `${trip.brief.destination}, ${trip.chosen.nights} nights, ${trip.chosen.stay.name}, activities: ${trip.chosen.activities.map(a => a.name).join(', ')}, ` +
-      `~₹${trip.chosen.totalPerPerson}/person. Reply like a real WhatsApp/Telegram message (max 20 words, Hinglish ok, maybe one request). Just the message.`);
-    const reply = text || friendReplyOffline(f.name, i).text;
+  /** AI persona agent: Claude role-plays the friend (demo when real friends aren't on Telegram). */
+  async simulateFriend(trip, f, i, phase) {
+    const p = PERSONAS[i % PERSONAS.length];
+    this.log(trip, `🤖 persona agent for ${f.name} (${p.vibe.split(',')[0]})`, 'think');
+    const b = trip.brief;
+    const ask = phase === 'prefs'
+      ? `ThatFriend (your friend's AI planner) asked what you want for ${b.kind === 'meetup' ? `a ${b.activity} in ${b.city} ${b.when}` : `a ${b.destination} trip ${b.when}, ~₹${b.budgetPerPerson}/head`}: your vibe, must-do, hard no, budget.`
+      : `ThatFriend sent the final plan: ${trip.chosen.title}, ~₹${trip.chosen.totalPerPerson}/head, ${[trip.chosen.stay?.name, ...trip.chosen.spots.map(s => s.name)].filter(Boolean).slice(0, 4).join(', ')}. Are you in?`;
+    const text = await askText(`You are ${f.name}, a ${p.vibe} Indian Gen Z friend. ${ask} Reply like a real WhatsApp text: max 25 words, Hinglish ok, 1 emoji max. Just the message.`);
+    const reply = text || (phase === 'prefs' ? p.offline : 'yesss im in 🙌');
     await new Promise(r => setTimeout(r, 600 + i * 700));
     this.emit('message', { to: f.key, from: f.key, text: reply, echo: true });
     f.simulating = false;
-    if (f.status !== 'replied') await this.friendReply(trip, f, reply);
+    if (phase === 'prefs') await this.friendPrefs(trip, f, reply); else if (f.status !== 'replied') await this.friendReply(trip, f, reply);
+  }
+
+  // ---------- PLANNING: merge everyone + research ----------
+  async makeOptions(trip, feedback = '') {
+    trip.stage = 'PLANNING';
+    this.touch(trip);
+    const b = trip.brief;
+    const live = config.llmMode !== 'offline';
+    this.send(trip.organizer, live ? `ok merging everyone's takes + checking real reviews online 🔎 gimme ~30 sec` : `merging everyone's takes 🧩 one sec`);
+    this.log(trip, `🔎 researching ${b.kind === 'meetup' ? b.city : b.destination} (web search + reviews) and merging ${trip.friends.filter(f => f.prefs).length} opinions…`, 'think');
+    let res = live ? await researchOptions(trip, this.orgName(trip), feedback).catch(e => (console.error(e), null)) : null;
+    if (!res) { res = offlineOptions(trip, this.orgName(trip)); if (res) this.log(trip, '📦 used the offline backup (real, well-known spots)', 'info'); }
+    if (!res) return this.send(trip.organizer, `ngl i couldn't pull good options for ${b.destination} rn 😅 try again in a min, or pick: Kashmir, Ooty, Goa, Manali`);
+    trip.merge = res.merge || [];
+    trip.options = res.options;
+    this.log(trip, `✅ ${trip.options.length} options ready (${llmStatus.backend})`, 'done');
+    this.touch(trip);
+
+    const merge = trip.merge.length ? `here's what the squad wanted → what i did 👇\n${trip.merge.map(m => `• *${m.who}*: ${m.wanted} → ${m.how}`).join('\n')}\n\n` : '';
+    const lines = trip.options.map(o =>
+      `*${o.id}. ${o.title}* · ${inr(o.totalPerPerson)}/head ${o.withinBudget ? '✅' : '⚠️ over budget'}\n${o.vibe}\n` +
+      (o.kind === 'meetup' ? `🕖 ${o.when}\n📍 ${o.spots.map(s => s.name).join(' → ')}` : `${o.transport ? '🚆 ' + o.transport.mode + '\n' : ''}${o.stay ? '🏡 ' + o.stay.name + '\n' : ''}📸 ${o.spots.slice(0, 4).map(s => s.name).join(', ')}`));
+    this.send(trip.organizer, `${merge}${lines.join('\n\n')}\n\nspots for option A below w pics 👇 pick one or tell me what to change`,
+      [trip.options.map(o => ({ label: `go w ${o.id}`, data: `pick:${o.id}` })), [{ label: '👀 show B spots', data: 'show:B' }]]);
+    this.cards(trip.organizer, await planCards(trip.options[0]), `option A spots`);
+  }
+
+  async onPlanning(trip, text) {
+    const show = text.match(/^show:([AB])$/i);
+    if (show) { const o = trip.options.find(x => x.id === show[1].toUpperCase()); if (o) return this.cards(trip.organizer, await planCards(o), `option ${o.id} spots`); }
+    const pick = text.match(/^(?:pick:)?\s*(?:go w |option\s*)?([ab12])\s*$/i);
+    if (pick) {
+      const id = { 1: 'A', 2: 'B' }[pick[1]] || pick[1].toUpperCase();
+      const o = trip.options.find(x => x.id === id);
+      if (o) { trip.chosen = structuredClone(o); this.touch(trip); return this.showChosen(trip); }
+    }
+    if (/^(ask_squad|final check|ask (the )?(squad|friends))/i.test(text) && trip.chosen) return this.askSquadFinal(trip);
+    if (/^(skip_friends|approve|book it|looks good)/i.test(text) && trip.chosen) return this.toApproval(trip);
+    if (/^tweak$/i.test(text)) return this.send(trip.organizer, 'say less, what should i change? ✏️');
+    if (!trip.chosen) return this.makeOptions(trip, text);
+    await this.refine(trip, text, 'organizer');
+    return this.showChosen(trip, 'updated ✨');
+  }
+
+  async refine(trip, feedback, who) {
+    this.log(trip, `✏️ tweaking: "${feedback.slice(0, 60)}"`, 'think');
+    const res = config.llmMode !== 'offline' ? await refinePlan(trip, feedback, who).catch(() => null) : null;
+    if (res) { trip.chosen = res.plan; this.log(trip, `✅ updated: ${res.changes.join('; ')}`, 'done'); }
+    else { (trip.chosen.notes ||= []).push(`${who}: ${feedback.slice(0, 80)}`); this.log(trip, `📝 noted "${feedback.slice(0, 60)}"`, 'info'); }
+    this.touch(trip);
+    return res?.changes || [`noted: ${feedback.slice(0, 60)}`];
+  }
+
+  async showChosen(trip, header) {
+    const o = trip.chosen;
+    const days = o.days.map(d => `*${o.kind === 'meetup' ? '' : 'day ' + d.day + ' · '}${d.title}*\n${d.items.map(i => '  • ' + i).join('\n')}`).join('\n');
+    const others = trip.friends.filter(f => f.vote !== 'no').map(f => f.name).join(', ');
+    this.send(trip.organizer, `${header || `locked *${o.title}* 🔒`}\n\n${days}\n\n💸 *${inr(o.totalPerPerson)}/head* (budget ${inr(trip.brief.budgetPerPerson)})\n\nsend this to ${others || 'the squad'} for a final 👍?`,
+      [[{ label: '👥 final check w squad', data: 'ask_squad' }, { label: '✏️ tweak', data: 'tweak' }], [{ label: '✅ skip, book it', data: 'skip_friends' }]]);
+    this.cards(trip.organizer, await planCards(o), 'the spots');
+  }
+
+  // ---------- FRIENDS: final 👍 on the merged plan ----------
+  async askSquadFinal(trip) {
+    const going = trip.friends.filter(f => f.vote !== 'no');
+    if (!going.length) return this.toApproval(trip);
+    trip.stage = 'FRIENDS';
+    for (const f of going) { f.status = 'pending'; delete f.counted; }
+    this.touch(trip);
+    this.log(trip, `📨 sending the merged plan to ${going.map(f => f.name).join(', ')} for a final 👍`, 'act');
+    const cards = await planCards(trip.chosen, 4);
+    for (const f of going) if (f.key && !f.key.startsWith('sim:')) await this.askFinalCheck(trip, f, cards);
+    if (this.users.get(trip.organizer)?.channel === 'telegram' && going.some(f => !f.key || f.key.startsWith('sim:')))
+      this.send(trip.organizer, `sent to whoever's on telegram 📲`, [[{ label: '🤖 simulate the rest', data: 'sim_friends' }]]);
+    else this.send(trip.organizer, `sent it to the squad 📲 i'll handle the back n forth`);
+  }
+
+  async askFinalCheck(trip, f, cards) {
+    const o = trip.chosen;
+    f.status = 'asked';
+    this.emit('friend', { tripId: trip.id, friend: f });
+    const yours = f.prefs?.summary ? `\nu said: “${f.prefs.summary}” → kept that in ✅` : '';
+    this.send(f.key, `ok here's the final plan 👇 *${o.title}* · ${o.when || this.what(trip)}\n💸 ~${inr(o.totalPerPerson)}/head${yours}\n\nu in? 🙌`,
+      [[{ label: "👍 i'm in", data: "i'm in" }, { label: '🤔 maybe', data: 'maybe' }, { label: '👎 out', data: "can't make it" }]]);
+    this.cards(f.key, cards || await planCards(o, 4));
+  }
+
+  async onFriendsStage(trip, text) {
+    if (/^sim_friends$/i.test(text)) return this.simulateFriends(trip, 'final');
+    if (/^(skip_friends|approve|go ahead|go)$/i.test(text)) return this.toApproval(trip);
+    const waiting = trip.friends.filter(f => f.vote !== 'no' && f.status !== 'replied').map(f => f.name);
+    this.send(trip.organizer, `still waiting on ${waiting.join(', ') || 'nobody'} ⏳ i'll nudge them. say “go” to skip`);
   }
 
   async friendReply(trip, f, text) {
     if (f.status === 'replied') return;
     f.status = 'replied';
-    const parsed = (await askJSON(
-      `A friend replied to a trip invite: "${text}". Return {"vote":"yes"|"no"|"maybe","request":"short request or empty string"}.`, SYSTEM))
-      || parseFriendReplyOffline(text);
-    f.status = 'replied'; f.vote = parsed.vote || 'yes'; f.request = parsed.request || ''; f.reply = text;
-    if (f.variant) {
-      const secs = Math.round((Date.now() - (f.askedAt || Date.now())) / 1000);
-      this.experiment.record(f.variant, f.vote === 'yes' ? 'yes' : 'replied', secs);
-      recordTraits(f.key, { invite_variant: f.variant, invite_vote: f.vote, reply_seconds: secs });
-      // Conversion events for the Flagsmith experiment's metrics.
-      trackEvent('friend_replied', f.key, secs);
-      if (f.vote === 'yes') trackEvent('friend_said_yes', f.key, 1);
-      flushEvents();
-      this.emit('experiment', this.experiment.summary());
-    }
+    const parsed = (await askJSON(`A friend replied to the final plan: "${text}". Return {"vote":"yes"|"no"|"maybe","request":"short request or empty"}.`, GENZ)) || parseFriendReplyOffline(text);
+    f.vote = parsed.vote || 'yes'; f.request = parsed.request || ''; f.reply = text;
     this.emit('friend', { tripId: trip.id, friend: f });
     this.touch(trip);
     const emoji = { yes: '✅', no: '❌', maybe: '🤔' }[f.vote] || '✅';
     this.log(trip, `${emoji} ${f.name}: "${text.slice(0, 70)}"`, 'act');
-    if (!f.simulated) this.send(f.key, f.vote === 'no' ? "No worries, I'll let them know 💙" : `Noted! 🙌 I'll lock it in and send your share once it's booked.`);
-    this.send(trip.organizer, `${emoji} *${f.name}* ${f.vote === 'yes' ? 'is in' : f.vote === 'no' ? "can't make it" : 'is a maybe'}${f.request ? ` — wants: ${f.request}` : ''}`);
-    if (trip.friends.every(x => x.vote) && !trip.squadDone) { trip.squadDone = true; await this.squadDone(trip); }
+    if (!f.simulated) this.send(f.key, f.vote === 'no' ? 'np, next time fr 💙' : `yayy 🙌 i'll book n send ur share`);
+    this.send(trip.organizer, `${emoji} *${f.name}* ${f.vote === 'yes' ? "is in" : f.vote === 'no' ? 'is out' : 'is a maybe'}${f.request ? `, wants: ${f.request}` : ''}`);
+    const going = trip.friends.filter(x => x.prefs?.in !== false);
+    if (going.every(x => x.status === 'replied') && !trip.squadDone) { trip.squadDone = true; await this.squadDone(trip); }
   }
 
   async squadDone(trip) {
     const going = trip.friends.filter(f => f.vote !== 'no');
     const requests = trip.friends.filter(f => f.request).map(f => `${f.name}: ${f.request}`);
     trip.brief.groupSize = going.length + 1;
-    this.log(trip, `🧮 Squad replied: ${going.length + 1} going. Folding in ${requests.length} requests`, 'think');
     let changes = [];
     if (requests.length) changes = await this.refine(trip, requests.join('; '), 'the friends');
-    this.send(trip.organizer, `🎉 Everyone's replied! ${going.length + 1} of you are going.${changes.length ? `\nI adjusted the plan: ${changes.join('; ')}.` : ''}`);
+    this.send(trip.organizer, `squad's locked 🔒 ${going.length + 1} of u going${changes.length ? `\nsmall tweaks: ${changes.join('; ')}` : ''}`);
     return this.toApproval(trip);
   }
 
@@ -412,43 +442,39 @@ export class Engine extends EventEmitter {
     trip.cart = buildCart(trip.chosen, n);
     this.touch(trip);
     const c = trip.cart;
-    const lines = c.items.map(i => `${i.icon} ${i.title} — ${inr(i.amount)}`).join('\n');
+    const lines = c.items.map(i => `${i.icon} ${i.title} · ${inr(i.amount)}`).join('\n');
     this.send(trip.organizer,
-      `🧾 *Final plan: ${trip.chosen.title}, ${trip.brief.destination}*\n\n${lines}\n\n*Total: ${inr(c.total)}* (${inr(c.perPerson)}/person × ${n})\nFood (~${inr(trip.chosen.foodPerPerson)}/person) is pay-as-you-go.\n\n` +
-      `Approve and I'll book everything with your saved card (xx4242) and collect each friend's share via UPI.`,
-      [[{ label: '✅ Approve & book', data: 'approve' }, { label: '✏️ Tweak', data: 'tweak' }]]);
+      `🧾 final damage for the ${this.what(trip)}:\n\n${lines}\n\n*${inr(c.total)} total* → ${inr(c.perPerson)}/head × ${n}${trip.chosen.foodPerPerson ? `\n(food ~${inr(trip.chosen.foodPerPerson)}/head is pay as u go)` : ''}\n\nsay the word n i'll book it all on ur card (xx4242), then collect everyone's share on UPI 💸`,
+      [[{ label: '✅ book it', data: 'approve' }, { label: '✏️ tweak', data: 'tweak' }]]);
   }
 
   async onApproval(trip, text) {
-    if (/^(approve|yes|book|go|confirm|ok|haan|done)/i.test(text)) {
+    if (/^(approve|yes|book|go|confirm|ok|haan|done|book it)/i.test(text)) {
       const flags = await this.flagsFor(trip.organizer, 'organizer');
       if (!flags.autonomous_booking.enabled) {
-        this.log(trip, '🛑 Flagsmith kill switch autonomous_booking = OFF → drafting cart only', 'think');
-        const list = trip.cart.items.map(i => `☐ ${i.icon} ${i.title} (${i.detail}): ${inr(i.amount)}`).join('\n');
-        return this.send(trip.organizer, `🛑 Autonomous booking is switched off by your admin (Flagsmith kill switch).\nI won't book anything myself. Here's your ready-to-book checklist:\n\n${list}\n\n*Total ${inr(trip.cart.total)}*. Tap approve again once it's back on and I'll take over.`,
-          [[{ label: '🔁 Approve again', data: 'approve' }]]);
+        this.log(trip, '🛑 Flagsmith kill switch autonomous_booking = OFF → cart only', 'think');
+        const list = trip.cart.items.map(i => `☐ ${i.icon} ${i.title} (${i.detail}) · ${inr(i.amount)}`).join('\n');
+        return this.send(trip.organizer, `🛑 auto-booking is switched off by ur admin (Flagsmith kill switch), so i won't book myself.\nhere's ur ready-to-book list:\n\n${list}\n\n*${inr(trip.cart.total)}*. tap again once it's back on n i'll take over`, [[{ label: '🔁 try again', data: 'approve' }]]);
       }
       if (!flags.payments_enabled.enabled) {
         this.log(trip, '🛑 Flagsmith kill switch payments_enabled = OFF → checkout blocked', 'think');
         emitEvent('payment_blocked_by_kill_switch', { tripId: trip.id, amount: trip.cart.total });
-        return this.send(trip.organizer, `🛑 Payments are paused by your admin (Flagsmith kill switch \`payments_enabled\`).\nNo money moved. Your cart (${inr(trip.cart.total)}) is saved, so tap approve again once payments are back on.`,
-          [[{ label: '🔁 Approve again', data: 'approve' }]]);
+        return this.send(trip.organizer, `🛑 payments are paused by ur admin (Flagsmith kill switch).\nno money moved, cart's saved (${inr(trip.cart.total)}). tap again once it's back on`, [[{ label: '🔁 try again', data: 'approve' }]]);
       }
       const limit = Number(flags.auto_book_limit.value) || Infinity;
       if (flags.auto_book_limit.enabled && trip.cart.total > limit) {
         trip.stage = 'GATE';
         this.touch(trip);
         this.log(trip, `🚩 Flagsmith auto_book_limit = ${inr(limit)} → ${inr(trip.cart.total)} needs sign-off`, 'think');
-        const { wait } = requestApproval({ tripId: trip.id, amount: trip.cart.total, limit, destination: trip.brief.destination, items: trip.cart.items.length });
-        this.log(trip, `🐝 NudgeBee approval-gated runbook "high-value-trip-checkout" started`, 'act');
-        this.send(trip.organizer, `🐝 Heads up: ${inr(trip.cart.total)} is above your auto-book limit of ${inr(limit)} (set in Flagsmith).\nI've opened an approval runbook in NudgeBee. Approve it there, or sign off right here:`,
-          [[{ label: '✅ Sign off', data: 'nb_approve' }, { label: '✋ Hold', data: 'nb_reject' }]]);
-        wait.then(r => r.approved ? this.startPayment(trip, r.by) : (trip.stage = 'APPROVAL', this.touch(trip), this.send(trip.organizer, `✋ Checkout held (${r.by}). Tweak the plan or approve again.`)));
+        const { wait } = requestApproval({ tripId: trip.id, amount: trip.cart.total, limit, destination: trip.brief.destination || trip.brief.city, items: trip.cart.items.length });
+        this.log(trip, '🐝 NudgeBee approval workflow started', 'act');
+        this.send(trip.organizer, `🐝 that's ${inr(trip.cart.total)}, above ur ${inr(limit)} auto-book limit (Flagsmith).\nopened an approval in NudgeBee. approve it there or sign off here:`, [[{ label: '✅ sign off', data: 'nb_approve' }, { label: '✋ hold', data: 'nb_reject' }]]);
+        wait.then(r => r.approved ? this.startPayment(trip, r.by) : (trip.stage = 'APPROVAL', this.touch(trip), this.send(trip.organizer, `✋ checkout on hold (${r.by}). tweak or try again`)));
         return;
       }
       return this.startPayment(trip);
     }
-    if (/^tweak$/i.test(text)) return this.send(trip.organizer, 'What should I change? ✏️');
+    if (/^tweak$/i.test(text)) return this.send(trip.organizer, 'what should i change? ✏️');
     trip.stage = 'PLANNING';
     await this.refine(trip, text, 'organizer');
     return this.toApproval(trip);
@@ -458,50 +484,48 @@ export class Engine extends EventEmitter {
     const token = pendingApprovalFor(trip.id);
     if (/^(nb_approve|approve|sign off|yes)/i.test(text) && token) return void resolveApproval(token, true, 'organizer in chat');
     if (/^(nb_reject|hold|no)/i.test(text) && token) return void resolveApproval(token, false, 'organizer in chat');
-    this.send(trip.organizer, '⏳ Waiting for the NudgeBee approval runbook. Tap Sign off to approve here.', [[{ label: '✅ Sign off', data: 'nb_approve' }]]);
+    this.send(trip.organizer, 'waiting on the NudgeBee approval ⏳ or tap sign off', [[{ label: '✅ sign off', data: 'nb_approve' }]]);
   }
 
   startPayment(trip, approvedBy) {
-    if (approvedBy) this.log(trip, `✅ Approval granted by ${approvedBy}`, 'done');
-    trip.payment = new PaymentSession(trip.cart, this.users.get(trip.organizer)?.name);
+    if (approvedBy) this.log(trip, `✅ approved by ${approvedBy}`, 'done');
+    trip.payment = new PaymentSession(trip.cart, this.orgName(trip));
     trip.stage = 'OTP';
     this.touch(trip);
-    this.log(trip, `💳 Payment intent ${trip.payment.id} for ${inr(trip.cart.total)} (SANDBOX)`, 'act');
+    this.log(trip, `💳 payment intent ${trip.payment.id} for ${inr(trip.cart.total)} (SANDBOX)`, 'act');
     emitEvent('payment_intent_created', { tripId: trip.id, amount: trip.cart.total });
-    this.send(trip.organizer, `💳 Charging ${inr(trip.cart.total)} to card xx4242 for ${trip.cart.items.length} bookings in one checkout.\nYour bank just sent an OTP — reply with it here (text or voice note). 🔐`);
+    this.send(trip.organizer, `💳 charging ${inr(trip.cart.total)} on xx4242 for ${trip.cart.items.length} bookings in one go\nur bank just sent an otp, drop it here 🔐 (text or voice note)`);
     this.emit('sms', { to: trip.organizer, text: trip.payment.smsText() });
   }
 
   async onOtp(trip, text) {
     const code = text.replace(/\D/g, '');
-    if (code.length !== 6) return this.send(trip.organizer, 'Please send the 6-digit OTP from your bank 🔐');
+    if (code.length !== 6) return this.send(trip.organizer, 'need the 6-digit otp from ur bank 🔐');
     const v = trip.payment.verify(code);
     if (!v.ok) {
-      if (trip.payment.status === 'failed' || trip.payment.status === 'expired') { trip.stage = 'APPROVAL'; this.touch(trip); return this.send(trip.organizer, `❌ Payment ${v.reason}. Tap approve to retry.`, [[{ label: '🔁 Retry', data: 'approve' }]]); }
-      return this.send(trip.organizer, `❌ ${v.reason} — ${v.remaining} tries left.`);
+      if (trip.payment.status === 'failed' || trip.payment.status === 'expired') { trip.stage = 'APPROVAL'; this.touch(trip); return this.send(trip.organizer, `❌ payment ${v.reason}. tap to retry`, [[{ label: '🔁 retry', data: 'approve' }]]); }
+      return this.send(trip.organizer, `❌ ${v.reason}, ${v.remaining} tries left`);
     }
     trip.stage = 'BOOKING';
     this.touch(trip);
-    this.log(trip, '✅ Payment authorized. Booking all items…', 'done');
-    this.send(trip.organizer, '✅ Payment authorized! Booking everything now… 🚀');
+    this.log(trip, '✅ payment authorized, booking everything…', 'done');
+    this.send(trip.organizer, 'payment went through ✅ booking everything rn 🚀');
     emitEvent('payment_authorized', { tripId: trip.id, amount: trip.cart.total });
     const flags = await this.flagsFor(trip.organizer, 'organizer');
     const drill = flags.booking_failure_drill.enabled;
-    if (drill) this.log(trip, '🚩 Flagsmith booking_failure_drill ON → StaySandbox will go down mid-booking', 'think');
+    if (drill) this.log(trip, '🚩 Flagsmith booking_failure_drill ON → the stay provider will go down mid-booking', 'think');
     trip.confirmations = [];
     for (const item of trip.cart.items) {
       this.log(trip, `⏳ ${item.provider}: ${item.title}`, 'act');
       this.emit('booking', { tripId: trip.id, item, status: 'in_progress' });
       try {
-        const res = await runBookingRunbook(item,
-          (provider) => bookItem(item, provider, { delayMs: config.bookingDelayMs ?? 900, outage: drill && item.kind === 'stay' }),
-          async (t, k) => this.log(trip, t, k));
+        const res = await runBookingRunbook(item, (provider) => bookItem(item, provider, { delayMs: config.bookingDelayMs ?? 900, outage: drill && item.kind === 'stay' }), async (t, k) => this.log(trip, t, k));
         const conf = { ...item, provider: res.provider, ref: res.ref, status: 'confirmed' };
         trip.confirmations.push(conf);
         this.log(trip, `✅ ${conf.provider}: ${conf.title} → ${conf.ref}`, 'done');
         this.emit('booking', { tripId: trip.id, item: conf, status: 'confirmed' });
       } catch (e) {
-        this.log(trip, `❌ ${item.title}: ${e.message} — escalated to NudgeBee`, 'act');
+        this.log(trip, `❌ ${item.title}: ${e.message}, escalated to NudgeBee`, 'act');
         emitEvent('booking_escalated', { tripId: trip.id, item: item.title });
         trip.confirmations.push({ ...item, status: 'failed', ref: 'PENDING' });
       }
@@ -510,22 +534,21 @@ export class Engine extends EventEmitter {
     trip.stage = 'DONE';
     this.touch(trip);
     const conf = trip.confirmations.map(c => `${c.icon} ${c.title}\n   ref *${c.ref}*`).join('\n');
-    this.send(trip.organizer, `🎉 *All booked!* ${trip.brief.destination}, here you come.\n\n${conf}\n\n💰 Paid ${inr(trip.cart.total)}. I've sent each friend their ${inr(trip.cart.perPerson)} share via UPI request.\nYou didn't have to be "that friend" today. 😎`);
+    this.send(trip.organizer, `🎉 DONE. ${this.what(trip)} is booked fr\n\n${conf}\n\npaid ${inr(trip.cart.total)}, sent everyone their share (${inr(trip.cart.perPerson)}) on UPI.\nu didn't have to be *that friend* today 😎`);
     const orgFlags = await this.flagsFor(trip.organizer, 'organizer');
-    if (orgFlags.voice_notes.enabled) this.voice(trip.organizer, `All booked! ${trip.brief.destination}, here you come. I paid ${trip.cart.total} rupees and sent everyone their share. You didn't have to be that friend today.`, this.users.get(trip.organizer)?.lang || 'en-IN');
-    const orgName = this.users.get(trip.organizer)?.name || 'the organizer';
+    if (orgFlags.voice_notes.enabled) this.voice(trip.organizer, `done! your ${this.what(trip)} is booked. I paid ${trip.cart.total} rupees and sent everyone their share. you didn't have to be that friend today.`, this.users.get(trip.organizer)?.lang || 'en-IN');
+    const orgName = this.orgName(trip);
     for (const f of trip.friends.filter(f => f.vote !== 'no' && f.key)) {
-      this.send(f.key, `🎒 You're booked for *${trip.brief.destination}*!\n${trip.confirmations.slice(0, 2).map(c => `${c.icon} ${c.title} — ${c.ref}`).join('\n')}\n\nYour share: *${inr(trip.cart.perPerson)}* → tap to pay ${orgName}:\n${upiCollectLink(orgName, trip.cart.perPerson, trip.brief.destination + ' trip')}`);
+      this.send(f.key, `🎒 ur booked for the *${this.what(trip)}*!\n${trip.confirmations.slice(0, 2).map(c => `${c.icon} ${c.title} · ${c.ref}`).join('\n')}\n\nur share: *${inr(trip.cart.perPerson)}* → tap to pay ${orgName}:\n${upiCollectLink(orgName, trip.cart.perPerson, this.what(trip))}`);
       const ff = await this.flagsFor(f.key, 'friend');
       if (ff.voice_notes.enabled) {
-        const line = `You're booked for ${trip.brief.destination}! Your share is ${trip.cart.perPerson} rupees, I've sent a UPI request from ${orgName}.`;
+        const line = `you're booked for the ${this.what(trip)}! your share is ${trip.cart.perPerson} rupees, I sent a UPI request from ${orgName}.`;
         const lang = f.lang || 'en-IN';
         this.voice(f.key, lang !== 'en-IN' && ff.friend_translation.enabled ? (await translate(line, lang)) || line : line, lang);
       }
     }
   }
 
-  /** Inbound voice (Telegram voice note / browser mic) after Sarvam STT. */
   async handleVoice(key, transcript, language, meta = {}) {
     const u = this.users.get(key) || this.registerUser(key, meta.name || 'Friend', meta.channel || 'web', meta.chatId);
     if (language && LANGS[language]) u.lang = language;
@@ -544,8 +567,8 @@ export class Engine extends EventEmitter {
 
   sendStatus(key) {
     const t = this.tripOf(key) || this.friendTripOf(key);
-    if (!t) return this.send(key, 'No active trip. Tell me where you want to go! 🌍');
-    this.send(key, `📋 Trip ${t.id} — ${t.brief.destination || '?'} — stage: ${t.stage}\n👥 ${t.friends.map(f => `${f.name} ${f.status === 'replied' ? ({ yes: '✅', no: '❌', maybe: '🤔' }[f.vote]) : '⏳'}`).join('  ')}\n🧠 LLM: ${llmStatus.backend}`);
+    if (!t) return this.send(key, 'nothing planned rn, where we going? 🌍');
+    this.send(key, `📋 ${this.what(t)} · stage: ${t.stage.toLowerCase()}\n👥 ${t.friends.map(f => `${f.name} ${f.vote === 'no' ? '❌' : f.prefs ? '✅' : '⏳'}`).join('  ')}\n🧠 brain: ${llmStatus.backend}`);
   }
 }
 
@@ -553,29 +576,4 @@ function clean(o) {
   const r = {};
   for (const [k, v] of Object.entries(o || {})) if (v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length)) r[k] = v;
   return r;
-}
-
-function defaultFriendNames(n) {
-  return ['Aman', 'Riya', 'Kabir', 'Sana', 'Dev', 'Isha', 'Arjun', 'Meera'].slice(0, Math.max(0, n));
-}
-
-function normalizePlan(p, fb, brief, i) {
-  const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v)) : d);
-  const out = {
-    id: ['A', 'B', 'C'][i] || fb.id,
-    title: p.title || fb.title,
-    vibe: p.vibe || fb.vibe,
-    destination: p.destination || brief.destination || fb.destination,
-    nights: num(p.nights, fb.nights),
-    transport: { mode: p.transport?.mode || fb.transport.mode, detail: p.transport?.detail || fb.transport.detail, costPerPerson: num(p.transport?.costPerPerson, fb.transport.costPerPerson) },
-    stay: { name: p.stay?.name || fb.stay.name, type: p.stay?.type || fb.stay.type, nights: num(p.stay?.nights, fb.stay.nights), costPerPerson: num(p.stay?.costPerPerson, fb.stay.costPerPerson) },
-    activities: Array.isArray(p.activities) && p.activities.length ? p.activities.slice(0, 6).map(a => ({ name: String(a.name || a), costPerPerson: num(a.costPerPerson, 0) })) : fb.activities,
-    localTravel: { detail: p.localTravel?.detail || fb.localTravel.detail, costPerPerson: num(p.localTravel?.costPerPerson, fb.localTravel.costPerPerson) },
-    foodPerPerson: num(p.foodPerPerson, fb.foodPerPerson),
-    days: Array.isArray(p.days) && p.days.length ? p.days.map((d, j) => ({ day: num(d.day, j + 1), title: d.title || `Day ${j + 1}`, items: (d.items || []).map(String).slice(0, 5) })) : fb.days,
-    notes: p.notes || fb.notes || [],
-  };
-  out.totalPerPerson = totalOf(out);
-  out.withinBudget = out.totalPerPerson <= (brief.budgetPerPerson || Infinity);
-  return out;
 }

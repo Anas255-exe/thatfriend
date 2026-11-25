@@ -120,8 +120,8 @@ const NUM_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7
 export function extractBriefOffline(text, prev = {}) {
   const t = text.toLowerCase();
   const brief = { ...prev };
-  const destMatch = text.match(/\b(?:to|in|visit|for)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)?)/) ||
-    text.match(/\b(ooty|uti|goa|manali|coorg|jaipur|pondicherry|gokarna|kerala|rishikesh)\b/i);
+  const destMatch = text.match(/\b(ooty|uti|ooti|goa|manali|coorg|jaipur|pondicherry|gokarna|kerala|rishikesh|kashmir|srinagar|gulmarg|ladakh|leh|udaipur|varanasi|darjeeling|meghalaya|spiti|kasol|mussoorie|munnar|hampi|andaman)\b/i) ||
+    text.match(/\b(?:to|visit)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)?)/);
   if (destMatch) {
     const d = destMatch[1];
     brief.destination = /^(uti|ooti)$/i.test(d) ? 'Ooty' : d[0].toUpperCase() + d.slice(1);
@@ -141,9 +141,9 @@ export function extractBriefOffline(text, prev = {}) {
   void money;
   const ppl = t.match(/(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:of us|people|persons|friends|pax|guys|members)/);
   if (ppl) brief.groupSize = Number(ppl[1]) || NUM_WORDS[ppl[1]];
-  const with_ = text.match(/\bwith\s+([A-Z][a-z]+(?:\s*(?:,|and|&)\s*[A-Z][a-z]+)*)/);
+  const with_ = text.match(/\b(?:with|w)\s+([A-Z][a-z]+(?:\s*(?:,|\band\b|&|\bn\b)\s*[A-Z][a-z]+)*)/);
   if (with_) {
-    brief.friends = with_[1].split(/\s*(?:,|and|&)\s*/).filter(Boolean);
+    brief.friends = with_[1].split(/\s*(?:,|\band\b|&|\bn\b)\s*/).filter(Boolean);
     brief.groupSize = Math.max(brief.groupSize || 0, brief.friends.length + 1);
   }
   const nights = t.match(/(\d+|two|three|four|five)\s*(?:nights?|n\b)/);

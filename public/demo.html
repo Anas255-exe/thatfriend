@@ -86,6 +86,12 @@ label.tog{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--m
 .call button{border:0;border-radius:99px;padding:9px 16px;font-weight:600;color:#fff}
 .call .ok{background:#2b8a3e}.call .no{background:#c92a2a}.call .ptt{background:#517da2}.call .ptt.rec{background:#c92a2a}
 .call .cap{font-size:12px;opacity:.8;max-width:240px;min-height:32px}
+.pcard{border-radius:12px;overflow:hidden;background:var(--tg-in);box-shadow:0 1px 1px rgba(0,0,0,.08);max-width:92%;font-size:12.5px;animation:pop .2s ease}
+.pcard img{width:100%;height:130px;object-fit:cover;display:block;background:var(--line)}
+.pcard .pb{padding:8px 10px;white-space:pre-wrap}
+.pcard .pb b{font-size:13.5px}
+.pcard .pl{display:flex;gap:6px;padding:0 10px 9px;flex-wrap:wrap}
+.pcard .pl a{font-size:12px;font-weight:600;text-decoration:none;background:var(--btn);color:var(--ink);padding:4px 9px;border-radius:99px}
 .flags{display:flex;flex-direction:column;gap:6px;font-size:12.5px}
 .flags label{display:flex;align-items:center;gap:8px;justify-content:space-between}
 .flags label span{flex:1}
@@ -114,7 +120,7 @@ label.tog{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--m
       <div class="typing" id="typing"></div>
       <form class="compose" id="form"><input id="input" autocomplete="off" placeholder="Message ThatFriend…"><button>➤</button></form>
     </div>
-    <p class="hint">Try: <a href="#" id="sample">"Plan Ooty next weekend with Aman, Riya and Kabir, 15k per person"</a></p>
+    <p class="hint">Try: <a href="#" id="sample">"plan kashmir next weekend w aman, riya n kabir, 15k each"</a></p>
   </section>
   <section>
     <h2>YOUR FRIENDS · texted by ThatFriend on your behalf</h2>
@@ -143,7 +149,7 @@ label.tog{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--m
 </main>
 <script>
 const ORG = 'organizer', ORG_NAME = 'Zoya';
-const STAGES = [['BRIEF','Brief'],['PLANNING','Itinerary'],['FRIENDS','Squad poll'],['APPROVAL','Approve'],['GATE','NudgeBee gate'],['OTP','OTP'],['BOOKING','Booking'],['DONE','Booked 🎉']];
+const STAGES = [['BRIEF','Brief'],['PREFS','Vibe check 💬'],['PLANNING','Merge + research 🔎'],['FRIENDS','Final 👍'],['APPROVAL','Approve'],['GATE','NudgeBee gate'],['OTP','OTP'],['BOOKING','Booking'],['DONE','Booked 🎉']];
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = (s) => esc(s).replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/(upi:\/\/\S+)/g, '<a href="#" title="$1">💸 Pay via UPI</a>');
@@ -234,7 +240,7 @@ function renderTrip(t){
   ].join('');
   // Auto-simulate friends a few seconds after they're asked (so the demo flows hands-free).
   clearTimeout(simTimer);
-  if (t.stage === 'FRIENDS' && $('#auto').checked) simTimer = setTimeout(() => send(ORG, ORG_NAME, 'sim_friends', null).catch(()=>{}), 3500);
+  if ((t.stage === 'FRIENDS' || t.stage === 'PREFS') && $('#auto').checked) simTimer = setTimeout(() => send(ORG, ORG_NAME, 'sim_friends', null).catch(()=>{}), 3500);
 }
 // ---------- Voice (Sarvam TTS, browser speech fallback) ----------
 const LANG_NAMES = {'en-IN':'English','hi-IN':'Hindi','ta-IN':'Tamil','te-IN':'Telugu','kn-IN':'Kannada','ml-IN':'Malayalam','bn-IN':'Bengali','mr-IN':'Marathi','gu-IN':'Gujarati','pa-IN':'Punjabi','od-IN':'Odia'};
@@ -255,6 +261,20 @@ function voiceBubble(key, text, lang, label){
   m.title = text;
   chat.appendChild(m); chat.scrollTop = chat.scrollHeight;
 }
+es.addEventListener('cards', e => {
+  const d = JSON.parse(e.data);
+  if (!d.to.startsWith('web:')) return;
+  const chat = chatEl(d.to);
+  for (const c of d.cards) {
+    const el = document.createElement('div'); el.className = 'pcard';
+    el.innerHTML = (c.photo ? `<img loading="lazy" src="${esc(c.photo)}" alt="" onerror="this.remove()">` : '') +
+      `<div class="pb"><b>${esc(c.title)}</b>
+${esc(c.text||'')}</div><div class="pl">` +
+      c.links.filter(l => l.url).map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`).join('') + '</div>';
+    chat.appendChild(el);
+  }
+  chat.scrollTop = chat.scrollHeight;
+});
 es.addEventListener('voice', e => { const v = JSON.parse(e.data); if (v.to.startsWith('web:')) voiceBubble(v.to, v.text, v.lang); });
 
 // ---------- "Calls" without telephony: in-browser call screen + push-to-talk (Sarvam STT) ----------

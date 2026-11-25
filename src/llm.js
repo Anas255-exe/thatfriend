@@ -8,12 +8,13 @@ import { sarvamChat, sarvamEnabled } from './sarvam.js';
 export const llmStatus = { backend: 'unknown', lastError: null, calls: 0, failures: 0 };
 let claudeDisabledUntil = 0;
 
-function runClaude(prompt, system) {
+function runClaude(prompt, system, opts = {}) {
   return new Promise((resolve, reject) => {
     const args = [
       '-p', '--output-format', 'json',
       '--model', config.claudeModel,
-      '--tools', '',
+      '--tools', opts.web ? 'WebSearch,WebFetch' : '',
+      ...(opts.web ? ['--allowedTools', 'WebSearch,WebFetch'] : []),
       '--no-session-persistence',
       '--strict-mcp-config',
       '--setting-sources', '',
@@ -24,7 +25,7 @@ function runClaude(prompt, system) {
     for (const k of Object.keys(env)) if (/^CLAUDE_CODE_(SESSION|HOST|MESSAGING|CHILD|SDK|ENTRYPOINT)/.test(k)) delete env[k];
     const child = spawn(config.claudeBin, args, { cwd: os.tmpdir(), env, windowsHide: true });
     let out = '', err = '';
-    const timer = setTimeout(() => { child.kill(); reject(new Error('claude timed out')); }, config.llmTimeoutMs);
+    const timer = setTimeout(() => { child.kill(); reject(new Error('claude timed out')); }, opts.web ? Math.max(config.llmTimeoutMs, 240000) : config.llmTimeoutMs);
     child.stdout.on('data', d => (out += d));
     child.stderr.on('data', d => (err += d));
     child.on('error', e => { clearTimeout(timer); reject(e); });
@@ -43,8 +44,8 @@ function runClaude(prompt, system) {
 }
 
 /** LLM chain: Claude Code → Sarvam-105b → null (caller uses offline planner). */
-export async function askText(prompt, system) {
-  const viaClaude = await askClaude(prompt, system);
+export async function askText(prompt, system, opts = {}) {
+  const viaClaude = await askClaude(prompt, system, opts);
   if (viaClaude) return viaClaude;
   if (config.llmMode !== 'offline' && sarvamEnabled()) {
     const viaSarvam = await sarvamChat(prompt, system);
@@ -54,11 +55,11 @@ export async function askText(prompt, system) {
   return null;
 }
 
-async function askClaude(prompt, system) {
+async function askClaude(prompt, system, opts = {}) {
   if (config.llmMode === 'offline' || Date.now() < claudeDisabledUntil) return null;
   llmStatus.calls++;
   try {
-    const text = await runClaude(prompt, system);
+    const text = await runClaude(prompt, system, opts);
     llmStatus.backend = 'claude-code';
     llmStatus.lastError = null;
     return text.trim();
@@ -74,10 +75,10 @@ async function askClaude(prompt, system) {
 }
 
 /** Ask Claude for JSON. Returns parsed object or null. */
-export async function askJSON(prompt, system) {
+export async function askJSON(prompt, system, opts = {}) {
   const sys = (system ? system + '\n\n' : '') +
     'Respond with ONLY a single valid JSON value. No markdown fences, no commentary.';
-  const text = await askText(prompt, sys);
+  const text = await askText(prompt, sys, opts);
   if (!text) return null;
   const m = text.match(/[\[{][\s\S]*[\]}]/);
   try { return JSON.parse(m ? m[0] : text); } catch {

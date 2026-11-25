@@ -1,4 +1,5 @@
 .env
 node_modules/
 zeroclaw/home/data/
+data/
 *.log

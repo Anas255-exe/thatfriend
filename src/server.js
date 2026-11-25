@@ -13,7 +13,7 @@ import { nudgeStatus, resolveApproval, latestPendingApproval } from './nudgebee.
 export const engine = new Engine();
 const clients = new Set();
 const broadcast = (event, data) => { const s = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`; for (const c of clients) c.write(s); };
-for (const ev of ['message', 'log', 'trip', 'friend', 'sms', 'booking', 'voice', 'call', 'experiment']) engine.on(ev, d => broadcast(ev, d));
+for (const ev of ['message', 'log', 'trip', 'friend', 'sms', 'booking', 'voice', 'call', 'experiment', 'cards']) engine.on(ev, d => broadcast(ev, d));
 const integrations = () => ({
   claude: llmStatus,
   sarvam: { ...sarvamStatus, enabled: sarvamEnabled() },
