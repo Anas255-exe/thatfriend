@@ -87,7 +87,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/integrations') return json(res, 200, integrations());
     if (url.pathname === '/api/experiment') return json(res, 200, engine.experiment.summary());
     if (url.pathname === '/api/reset' && req.method === 'POST') {
-      for (const t of engine.trips.values()) t.stage = 'ARCHIVED';
+      // Only clear web-demo trips; never touch real Telegram conversations.
+      for (const t of engine.trips.values()) if (t.organizer.startsWith('web:')) t.stage = 'ARCHIVED';
       broadcast('reset', {});
       return json(res, 200, { ok: true });
     }

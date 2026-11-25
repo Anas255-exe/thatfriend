@@ -20,7 +20,8 @@
    - **Tab 5:** NudgeBee workflow (if connected)
    - **Phone:** Telegram open on @ThatFriendTripBot. Mirror it if you can.
 3. In Flagsmith, make sure `payments_enabled`, `autonomous_booking` and `friend_outreach` are **ON**, and `booking_failure_drill` is **OFF**.
-4. On the demo page, click **↺ Reset demo**.
+4. On the demo page, click **↺ Reset demo**. It only clears demo trips; Telegram chats are untouched.
+   - **Want phones to ring on stage?** In the Flags panel, set `invite_style` to **call**. Forced variants are excluded from experiment stats. Set it back to **experiment** for a real bucketed run.
 5. Want instant replies? Set `LLM_MODE=offline` in `.env`. Claude Code replies take 20–40 s per step; offline replies are instant and the voices still work.
 
 ## The 3-minute demo

@@ -300,8 +300,9 @@ export class Engine extends EventEmitter {
     // getExperimentFlag records the exposure event for Flagsmith Experimentation.
     const expValue = flags.invite_style.source === 'override' ? null : await experimentVariant('invite_style', f.key, { role: 'friend', language: lang });
     const style = flags.invite_style.enabled ? String(expValue || flags.invite_style.value || 'call') : (flags.voice_calls.enabled ? 'call' : flags.voice_notes.enabled ? 'voice_note' : 'text');
-    f.variant = style; f.askedAt = Date.now();
-    this.experiment.record(style, 'sent');
+    const forced = flags.invite_style.source === 'override';
+    f.variant = forced ? null : style; f.askedAt = Date.now();
+    if (!forced) this.experiment.record(style, 'sent');
     this.log(trip, `🧪 Flagsmith experiment invite_style → ${f.name} gets "${style}"`, 'think');
     recordTraits(f.key, { invite_variant: style, trip_id: trip.id });
     if (style === 'text') {
