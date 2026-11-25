@@ -51,6 +51,13 @@ export function resolveApproval(token, approved, by = 'nudgebee') {
   return true;
 }
 
+/** Most recent pending approval (NudgeBee's HTTP step calls back without our per-checkout token). */
+export function latestPendingApproval() {
+  let last = null;
+  for (const token of pendingApprovals.keys()) last = token;
+  return last;
+}
+
 export function pendingApprovalFor(tripId) {
   for (const [token, p] of pendingApprovals) if (p.meta.tripId === tripId) return token;
   return null;

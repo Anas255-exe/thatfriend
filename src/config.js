@@ -56,6 +56,8 @@ export const config = {
   // NudgeBee workflow webhook (POST /webhook/:workflowId) + secret
   nudgebeeWebhook: process.env.NUDGEBEE_WEBHOOK_URL || '',
   nudgebeeSecret: process.env.NUDGEBEE_WEBHOOK_SECRET || '',
+  // Shared secret NudgeBee's HTTP step sends back (?key=...) when approving the latest checkout
+  nudgebeeCallbackKey: process.env.NUDGEBEE_CALLBACK_KEY || '',
   // Languages for demo friends, in order (Aman, Riya, Kabir…)
   friendLangs: (process.env.DEMO_FRIEND_LANGS || 'hi-IN,ta-IN,en-IN').split(',').map(s => s.trim()),
 };

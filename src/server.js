@@ -8,7 +8,7 @@ import { startTelegram } from './telegram.js';
 import { chatCompletion, llmStatus } from './llm.js';
 import { tts, stt, sarvamEnabled, sarvamStatus } from './sarvam.js';
 import { getFlags, setOverride, flagStatus, FLAG_DEFS } from './flags.js';
-import { nudgeStatus, resolveApproval } from './nudgebee.js';
+import { nudgeStatus, resolveApproval, latestPendingApproval } from './nudgebee.js';
 
 export const engine = new Engine();
 const clients = new Set();
@@ -29,6 +29,11 @@ const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'applic
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  // Requests arriving through the public tunnel may only reach the NudgeBee callback and the landing page.
+  // The Claude bridge, demo controls and flags stay local-only.
+  if (req.headers['cf-connecting-ip'] && !/^\/api\/nudgebee\//.test(url.pathname) && !['/', '/index.html'].includes(url.pathname)) {
+    res.writeHead(403, { 'content-type': 'text/plain' }); return res.end('local only');
+  }
   try {
     // Live event stream for the web demo.
     if (url.pathname === '/events') {
@@ -78,11 +83,21 @@ const server = http.createServer(async (req, res) => {
       return json(res, ok ? 200 : 400, { ok });
     }
     // NudgeBee approval callback (the workflow's approval step / HTTP action calls this).
-    const ap = url.pathname.match(/^\/api\/nudgebee\/approval\/([a-f0-9]+)$/);
+    const ap = url.pathname.match(/^\/api\/nudgebee\/approval\/([a-z0-9]+)$/);
     if (ap && req.method === 'POST') {
       const body = await readBody(req).catch(() => ({}));
-      const ok = resolveApproval(ap[1], body.approved !== false, 'NudgeBee workflow');
-      return json(res, ok ? 200 : 404, { ok });
+      let token = ap[1];
+      if (token === 'latest') {
+        // Shared-secret check: only our NudgeBee workflow knows the key.
+        if (!config.nudgebeeCallbackKey || url.searchParams.get('key') !== config.nudgebeeCallbackKey) return json(res, 401, { ok: false });
+        token = latestPendingApproval();
+      }
+      const status = String(body.status ?? body.approved ?? 'approve').toLowerCase();
+      const approved = !/reject|false|denied|no/.test(status);
+      const by = `NudgeBee workflow${body.approver ? ' (' + body.approver + ')' : ''}`;
+      const ok = !!token && resolveApproval(token, approved, by);
+      console.log(`[nudgebee] approval callback: ${ok ? (approved ? 'APPROVED' : 'REJECTED') : 'no pending approval'} by ${by}`);
+      return json(res, ok ? 200 : 404, { ok, approved });
     }
     if (url.pathname === '/api/integrations') return json(res, 200, integrations());
     if (url.pathname === '/api/experiment') return json(res, 200, engine.experiment.summary());
